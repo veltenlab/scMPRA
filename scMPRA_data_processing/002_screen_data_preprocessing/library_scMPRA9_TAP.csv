@@ -1,0 +1,4 @@
+fastqs, sample, library_type
+/users/lvelten/project/SCG4SYN/Experiments/240315_scMPRA_LibAlpha_Wilkinson/screen_HSC/fastqs/Ju_GUI_lib, guide, Custom
+/users/lvelten/project/SCG4SYN/Experiments/240315_scMPRA_LibAlpha_Wilkinson/screen_HSC/fastqs/Ju_GFP_lib, GFP, Custom
+/users/lvelten/project/SCG4SYN/Experiments/240315_scMPRA_LibAlpha_Wilkinson/screen_HSC/fastqs/Ju_TAP_lib, TAP, Gene Expression

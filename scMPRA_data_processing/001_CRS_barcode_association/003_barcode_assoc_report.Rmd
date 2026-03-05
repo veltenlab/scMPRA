@@ -1,0 +1,351 @@
+---
+title: "Library Beta Barcode Association Report"
+author: "Julia Rühle"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = '~/cluster/project/SCG4SYN/Experiments/240314_LibBeta_association/')
+
+require(ggplot2)
+require(LSD)
+require(plyr)
+require(gridExtra)
+require(reshape2)
+library(patchwork)
+library(dplyr)
+library(tidyverse)
+library(viridis)
+
+bc_crs_ass_beta <- read.csv(gzfile("~/cluster/project/SCG4SYN/Experiments/240314_LibBeta_association/iseq_outs/mapped_BIG.csv.gz"), sep = "\t")
+bc_crs_ass_alpha <- read.csv(gzfile("~/cluster/project/SCG4SYN/Experiments/230717_scMPRA_LibAlpha_K562/CRS_BC_ASS/iseq_outs/mapped_BIG.csv.gz"), sep = "\t")
+
+bc_crs_ass_alpha$exp <-"Alpha"
+bc_crs_ass_beta$exp <- "Beta"
+
+#concatenate all the data 
+all <- rbind(bc_crs_ass_alpha, bc_crs_ass_beta)
+
+```
+
+
+# Mapping Stats
+
+```{r mapping stats, include=FALSE}
+
+#total number of mapped reads, total number of reads in .fastq: 2439359, 246382, 264689
+tot_reads_alpha <- 2439359
+tot_reads_beta <- 2750976
+
+perc_mapped_alpha <- sum(bc_crs_ass_alpha$READS)/tot_reads_alpha*100
+perc_mapped_beta <- sum(bc_crs_ass_beta$READS)/tot_reads_beta*100
+
+#make a table for this 
+mapping_info <- data.frame(Library = c("Alpha", "Beta"), 
+                             TotNoReads = c(tot_reads_alpha, tot_reads_beta), 
+                             MappingRate = c(perc_mapped_alpha, perc_mapped_beta))
+
+```
+
+```{r}
+mapping_info
+```
+
+# Quality Control and overall statistics 
+## Read distribution across barcodes 
+First, we are looking at the number of reads per barcode. In this case, one barcode is the concatenated barcode of the guide and the GFP. If we filter out the ones, that have only one read (or a relatively low number of reads), Lars and Robert have seen in the past, that this increases the correlation between samples in further analyses. In this case, we discard barcodes that have reads with less than 3 (red) and 8 (blue) for the respective reads (quite arbitrary). 
+
+```{r qc barcodes reads, include=TRUE}
+
+hist_reads_bc <- ggplot(all, aes(x=log10(READS), fill = exp)) +
+  geom_histogram() + 
+  facet_wrap(~ exp) + 
+  theme_classic() + 
+  ggtitle("Number of Reads per Barcode before QC")
+  
+
+bc_crs_ass_alpha_filt <- subset(bc_crs_ass_alpha, READS > 8) 
+bc_crs_ass_beta_filt <- subset(bc_crs_ass_beta, READS > 3)
+
+
+#total number of reads after filtering 
+
+all_filt <- rbind(bc_crs_ass_alpha_filt, bc_crs_ass_beta_filt)
+
+hist_reads_bc_filtered <- ggplot(all_filt, aes(x=log10(READS), fill = exp)) +
+  geom_histogram() + 
+  facet_wrap(~ exp) + 
+  geom_vline(xintercept = log10(3), colour = "blue") + 
+  #geom_vline(xintercept = log10(6), colour = "green") + 
+  geom_vline(xintercept = log10(8), colour = "red") + 
+  theme_classic() + 
+  ggtitle("Number of Reads per Barcode after QC")
+
+hist_reads_bc / hist_reads_bc_filtered
+
+```
+
+
+<table>
+
+ Library      No of Barcodes before Filtering     After  
+---------     -------------------                 -----------------
+ Alpha          `r nrow(bc_crs_ass_alpha)`            `r nrow(bc_crs_ass_alpha_filt)`
+ Beta           `r nrow(bc_crs_ass_beta)`             `r nrow(bc_crs_ass_beta_filt)`
+
+
+</table>
+
+I like these plots, but Lars prefers the log log plot. To check if you sequences to saturation. 
+
+```{r loglog sat, include=TRUE}
+
+#y-axis log frequency of barcodes 
+#x-axis log #Reads #maybe we can plot before and after filtering 
+
+reads_summary_all <- as.data.frame(table(all$exp, all$READS))
+reads_summary_all$Var1 <- as.character(reads_summary_all$Var1)
+reads_summary_all$Var2 <- as.numeric(reads_summary_all$Var2)
+
+
+reads_summary_all_filt <- as.data.frame(table(all_filt$exp, all_filt$READS))
+reads_summary_all_filt$Var1 <- as.character(reads_summary_all_filt$Var1)
+reads_summary_all_filt$Var2 <- as.numeric(reads_summary_all_filt$Var2)
+
+sat_all <-  ggplot(data = reads_summary_all, aes(x=log10(Var2),y = log10(Freq), color= Var1, group = Var1)) + 
+  geom_point(alpha = 0.3, size = 2.5)+ 
+  scale_color_viridis(discrete = TRUE, name = "CRS-BC association") + # 
+  labs(x = "Log10(Reads)", y = "Log10(Frequency)") +
+  ggtitle("Before QC") + 
+  theme_bw() + 
+  #geom_vline(xintercept = log10(5), linetype = "dashed") +
+  theme(panel.grid = element_blank(), axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.title = element_text(size = 15), legend.text = element_text(size = 14), legend.position = "none") +
+  guides(colour = guide_legend(override.aes = list(alpha=1)))
+
+sat_all_filt <-  ggplot(data = reads_summary_all_filt, aes(x=log10(Var2),y = log10(Freq), color= Var1, group = Var1)) + 
+  geom_point(alpha = 0.3, size = 2.5)+ 
+  scale_color_viridis(discrete = TRUE, name = "CRS-BC association") + # 
+  labs(x = "Log10(Reads)", y = "Log10(Frequency)") + 
+  ggtitle("After QC") + 
+  theme_bw() + 
+  #geom_vline(xintercept = log10(5), linetype = "dashed") +
+  theme(panel.grid = element_blank(), axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.title = element_text(size = 15), legend.text = element_text(size = 14)) +
+  guides(colour = guide_legend(override.aes = list(alpha=1)))
+
+sat_all + sat_all_filt
+
+```
+
+
+Next, we are looking at the distribution of deviant reads. The number of deviant reads determines the number of reads who map exactly on this GFP-Guide barcode combination. So we want to filter those that have a lot of deviant reads. 
+
+```{r qc barcodes deviantreads, include=TRUE}
+
+ggplot(all_filt, aes(x = DEVIANTREADS / (READS + DEVIANTREADS), fill = exp)) + 
+  geom_histogram() + 
+  facet_wrap(~ exp) + 
+  theme_classic() + 
+  ggtitle("Relative number of deviant reads")
+#par(mfrow = c(2,1))
+
+```
+
+## Summary Statistics 
+
+Now, we are almost done with the filtering and will compute some summary statistics on the qced libraries. First, we determine the number of barcodes per library. Then we are comparing the number of sequenced reads. Last, the number and fraction of deviant reads with respect to the total number of reads is plotted. 
+
+```{r summary stats before qc, include = TRUE}
+
+summary <- all_filt %>%
+  group_by(exp) %>%
+  summarise(
+    nbc = n(),
+    nreads = sum(READS),
+    ndev = sum(DEVIANTREADS > READS)
+  )
+
+summary$percentdev <- summary$ndev / summary$nbc
+summary <- melt(summary, id.vars = "exp")
+
+stats <- ggplot(summary, aes(x = exp, y = value, fill = exp)) +
+  geom_col() + 
+  facet_wrap(~ variable, scales="free_y") + 
+  theme(axis.text.x = element_text(angle=45, hjust=1)) + 
+  theme_classic() + 
+  ggtitle("")
+
+stats 
+```
+
+Now we filter out, all of the barcodes that have less than 20% of deviant reads of the total number of reads (READS+DEVIANTREADS)
+
+```{r, include = TRUE}
+all_filt <- subset(all_filt, DEVIANTREADS / (READS + DEVIANTREADS) < 0.2)
+```
+
+# Barcode representation
+Most importantly, we want to make sure that the GREs are represented evenly in the library. This means, that if the CRS are equally present in the library, we would expect equal number of reads for each CRS after sequencing. To look into this, we first compute the number of reads per CRS. Then we rank each CRS, according to its number of reads (Rank 1: The CRS with the lowest number of reads).
+
+## How many reads represent one GRE? 
+
+Each dot represents a GRE ranked according to the number of reads by which it is represented. 
+
+```{r number of reads representing the GREs, include = TRUE}
+
+read_per_crs <- all_filt %>%
+  group_by(CRS, exp) %>%
+  summarise(
+    nreads = sum(READS),
+    nbc = sum(READS >= if_else(unique(exp) == "Recloned", 10, 3)))
+
+read_per_crs <- split(read_per_crs, read_per_crs$exp)
+read_per_crs <- lapply(read_per_crs, function(x) {x$rank <- rank(x$nreads); return(x)})
+q <- lapply(read_per_crs, function(x) data.frame(q = quantile(x$nreads, c(0.05,0.95)), exp = unique(x$exp)))
+q <- do.call(rbind, q)
+read_per_crs <- do.call(rbind, read_per_crs)
+
+#png("001_comparisonA.png",width=1024,height=768,res=150)
+#qplot(x = rank , y = nreads, data= read_per_crs, color =exp)  + scale_y_log10()
+
+all_in_one <- ggplot(read_per_crs, aes(x = rank, y = nreads, color = exp)) + 
+  scale_y_log10() + 
+  geom_point() + 
+  theme_classic()
+
+plots <- lapply(split(read_per_crs, read_per_crs$exp), function(x)
+  qplot(x = rank , y = nreads, data= x)  + scale_y_log10() + ggtitle(unique(x$exp)) + theme_classic() +
+    geom_vline(xintercept = c(0.05,0.95)*nrow(x))+
+    geom_hline(yintercept = subset(q, exp == unique(x$exp))$q) + 
+    scale_y_log10(breaks = subset(q, exp == unique(x$exp))$q))
+
+all_in_one /  wrap_plots(plots) + 
+  plot_annotation(title = 'GREs ranked according to their number of reads',
+                  tag_levels = 'a') 
+
+quantiles_libraries <- read_per_crs %>% 
+  group_by(exp) %>%  
+  summarise(quantile = scales::percent(c(0.05, 0.5, 0.95)),
+            nreads = quantile(nreads, c(0.05, 0.5, 0.95)), 
+            mean = mean(nreads))
+
+#now we compute the foldchanges between the reads of the 5% and the 95% quantile. 
+
+quantiles_libraries_read_fc <- quantiles_libraries %>% 
+  group_by(exp) %>% 
+  mutate(fc = (nreads[3] / nreads[1]))
+
+```
+
+This plot represented in numbers. Additionally, we calculate the mean number of reads per GRE.  
+```{r}
+quantiles_libraries_read_fc %>%  
+  group_by(exp) %>% 
+  summarise(fc = mean(fc), mean = mean(mean))
+```
+
+## How many barcodes represent one GRE? 
+
+```{r number of barcodes representing the GREs, include = TRUE}
+
+#hier nochmal schauen ob des Sinn macht, ich glaub ich berechne hier vllt was anderes als ich will 
+bc_per_GRE <- read_per_crs %>%
+  group_by(exp, CRS) %>% 
+  summarise(mean = mean(nbc)) %>% # hier stimmt was nicht glaube 
+  arrange(desc(mean))
+
+mean_bcs_per_GRE <- ggplot(data=bc_per_GRE, aes(x=reorder(CRS, mean), y=mean)) +
+  geom_bar(stat="identity") + 
+  facet_wrap(~ exp) +
+  theme_classic() 
+
+bc_per_GRE_hist_per_lib <- ggplot(data = bc_per_GRE, aes(x = mean)) + 
+  geom_histogram(bins = 50) + 
+  facet_wrap(~ exp) + 
+  theme_classic()
+
+mean_bcs_per_GRE + bc_per_GRE_hist_per_lib +
+  plot_annotation(tag_levels = 'a') 
+  
+```
+
+
+# GFP and Guide Barcodes
+
+Last, we are checking if the GFP and the GUIDE Barcodes behave differently. Before, we treated these two barcodes as if it was one (merged string). For this, we split the barcode into the 15 first letters (GFP BC) and the 15 last letters (guide BC). 
+
+```{r gfp vs guide ,include = TRUE}
+
+all_filt$GFP_BC <- substr(all_filt$BARCODE, 1,15)
+all_filt$gRNA <- substr(all_filt$BARCODE, 16,30)
+
+mostAbundant <- function(vector) {
+  a <- table(vector)
+  names(a)[which.max(a)]
+}
+
+#From what i understand, is that the GFP barcode is more complex than the guide barcode 
+
+gRNA_summary <- all_filt %>%
+  group_by(gRNA, exp) %>%
+  summarise(
+    nCRS = n_distinct(CRS),
+    mainCRS = mostAbundant(CRS), #selects the most abundant one (the one represented by the highest no of barcodes) because in rare cases the one guide barcode is associated with more than one CRS
+    n_gfp_bcs.mainCRS = n_distinct(GFP_BC[CRS == mainCRS]),
+    n_gfp_bcs.otherCRS = n_distinct(GFP_BC[CRS != mainCRS]))
+
+GFP_summary <- all_filt %>%
+  group_by(GFP_BC, exp) %>%
+  summarise(
+    nCRS = n_distinct(CRS),
+    mainCRS = mostAbundant(CRS),
+    nguide.mainCRS = n_distinct(gRNA[CRS == mainCRS]),
+    nguide.otherCRS = n_distinct(gRNA[CRS != mainCRS]))
+
+to_plot_GFP <- GFP_summary %>% 
+  group_by(exp) %>% 
+  summarise(
+    blubs = table(nguide.mainCRS))
+
+#for different libs this needs to be adjusted 
+to_plot_GFP$counts <- c(1:nrow(to_plot_GFP %>% filter(exp == "Alpha")), 1:nrow(to_plot_GFP %>% filter(exp == "Beta")))
+
+to_plot_guide <- gRNA_summary %>% 
+  group_by(exp) %>% 
+  summarise(
+    blubs = table(n_gfp_bcs.mainCRS))
+
+to_plot_guide$counts <- c(1:nrow(to_plot_guide %>% filter(exp == "Alpha")), 1:nrow(to_plot_guide %>% filter(exp == "Beta")))
+
+
+guide_barcodes <- ggplot(to_plot_guide, aes(x = counts, y = blubs, fill = exp)) +
+  geom_col() + 
+  facet_wrap(~ exp, scales="free_y") + 
+  theme(axis.text.x = element_text(angle=45, hjust=1)) + 
+  theme_classic() + 
+  ggtitle("Number of the GFP barcodes that are associated with certain number of guide barcodes")
+
+gfp_barcodes <- ggplot(to_plot_GFP, aes(x = counts, y = blubs, fill = exp)) +
+  geom_col() + 
+  facet_wrap(~ exp, scales="free_y") + 
+  theme(axis.text.x = element_text(angle=45, hjust=1)) + 
+  theme_classic() + 
+  ggtitle("Number of the guide barcodes that are associated with certain number of GFP barcodes")
+
+guide_barcodes / gfp_barcodes
+
+```
+
+
