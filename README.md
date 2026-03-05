@@ -24,8 +24,6 @@ Lentiviral single-cell MPRA of synthetic enhancers reveals motif affinity-based 
    
 ## Reproducibility 
 
-For the experimental protocol see:
-
 ### Association Library processing: 
 Generate look-up table that connects presence barcode, CRE and quantitative barcode (GFP). 
 
