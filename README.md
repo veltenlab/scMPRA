@@ -11,9 +11,6 @@ Lentiviral single-cell MPRA of synthetic enhancers reveals motif affinity-based 
 ├── scMPRA_data_processing/
 │   ├── 001_CRS_barcode_association/      # scripts to process barcode association library
 │   └── 002_screen_data_preprocessing/    # scripts to process GFP, guide & GEX libraries
-├── results/
-│   ├── figures/                          # main figures
-│   ├── supplement/                       # supplementary figures
 └── README.md
 ```
 
@@ -32,24 +29,24 @@ For the experimental protocol see:
 ### Association Library processing: 
 Generate look-up table that connects presence barcode, CRE and quantitative barcode (GFP). 
 
-  1. Create a reference fasta file (.fa) with all sequences in CRE library 
+  1. Create a reference fasta file with all sequences in CRE library (such as example_fasta_CRE_reference.fa)
   2. `scMPRA_data_processing/001_CRS_barcode_association/001_pipeline_singlecell.sh` 
   Aligns reads to CREs & readsout and counts barcodes. 
   3. `scMPRA_data_processing/001_CRS_barcode_association/003_barcode_assoc_report.Rmd` 
   Plots basic Library QC features. 
   4. `scMPRA_data_processing/001_CRS_barcode_association/004_create_feature_ref_filtered.R` 
-  Produces look-up table (feature_ref_filtered.csv) that is input file for the step 1 in the Screen Libraries processing. 
+  Produces look-up table (example_feature_ref_filtered.csv) that is input file for the step 1 in the Screen Libraries processing. 
   
 ### Screen Libraries processing: 
 Generate count tables for guideRNA library (presence barcodes), GFP library (presence barcodes) & targeted transcriptomes:
 
   1. `002_screen_data_preprocessing/cellranger_scMPRA_count.sh`
-  Create filtered_feature_bc_matrix using Cellranger (using feature_ref_filtered.csv & library_scMPRA.csv)
-  2. `002_screen_data_preprocessing/cellranger_scMPRA_count.sh`
+  Create filtered_feature_bc_matrix using Cellranger (using example_feature_ref_filtered.csv & library_scMPRA.csv)
+  2. `002_integrate_seurat_create_enhancer_counts.sh`
   Create seurat object & enhancer quantification table.
   
 
-##Citation
+## Citation
 
 If you use this code, please cite:
 
