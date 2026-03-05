@@ -19,8 +19,6 @@ Lentiviral single-cell MPRA of synthetic enhancers reveals motif affinity-based 
 
 ## Data availability 
 
-
-- **Raw data**: available at [xx](xx)
 - **Preprocessed objects used for plotting**: 
    - Seurat objects containing raw and normalized gene expression 
    - Preprocessed enhancer count data with synthetic enhancer annotation (for Library PoC, Library Alpha, Library Beta)
@@ -29,32 +27,27 @@ Lentiviral single-cell MPRA of synthetic enhancers reveals motif affinity-based 
    
 ## Reproducibility 
 
-
 For the experimental protocol see:
 
 ### Association Library processing: 
 Generate look-up table that connects presence barcode, CRE and quantitative barcode (GFP). 
 
   1. Create a reference fasta file (.fa) with all sequences in CRE library 
-  2. 'scMPRA_data_processing/001_CRS_barcode_association/001_pipeline_singlecell.sh' 
+  2. `scMPRA_data_processing/001_CRS_barcode_association/001_pipeline_singlecell.sh` 
   Aligns reads to CREs & readsout and counts barcodes. 
-  3. 'scMPRA_data_processing/001_CRS_barcode_association/003_barcode_assoc_report.Rmd' 
+  3. `scMPRA_data_processing/001_CRS_barcode_association/003_barcode_assoc_report.Rmd` 
   Plots basic Library QC features. 
-  4. 'scMPRA_data_processing/001_CRS_barcode_association/004_create_feature_ref_filtered.R' 
+  4. `scMPRA_data_processing/001_CRS_barcode_association/004_create_feature_ref_filtered.R` 
   Produces look-up table (feature_ref_filtered.csv) that is input file for the step 1 in the Screen Libraries processing. 
   
 ### Screen Libraries processing: 
 Generate count tables for guideRNA library (presence barcodes), GFP library (presence barcodes) & targeted transcriptomes:
 
-  1. '002_screen_data_preprocessing/cellranger_scMPRA_count.sh' 
+  1. `002_screen_data_preprocessing/cellranger_scMPRA_count.sh`
   Create filtered_feature_bc_matrix using Cellranger (using feature_ref_filtered.csv & library_scMPRA.csv)
-  2. '002_screen_data_preprocessing/cellranger_scMPRA_count.sh' 
+  2. `002_screen_data_preprocessing/cellranger_scMPRA_count.sh`
   Create seurat object & enhancer quantification table.
   
-### Results 
-  1. Each main figure script reads from 'results/figures'
-  1. Each supplemental figure script reads from 'results/supplement'
-
 
 ##Citation
 

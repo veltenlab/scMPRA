@@ -15,8 +15,8 @@
 #we have to reverse complement all the sequences,
 #because in the scMPRA screen we are sequencing them with R2 
 
-setwd("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/")
-bc_crs_ass_Beta <- read.csv(gzfile("./CRS_BC_ASS/outs/libBeta_novaseq_no_bc_corr.csv.gz"), sep = "\t") 
+setwd("/path_to_association_file/")
+bc_crs_ass_Beta <- read.csv(gzfile("./mapped_BIG.csv.gz"), sep = "\t") 
 
 #according to the log-log plot i would choose 10 as a cutoff for correct barcodes 
 bc_crs_ass_Beta_filt <- subset(bc_crs_ass_Beta, READS > 10)

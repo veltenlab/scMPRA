@@ -11,12 +11,12 @@
 #Add EasyBuild configuration
 #module use /software/as/el7.2/EasyBuild/CRG/modules/all
 
-dir=/users/lvelten/project/SCG4SYN/Experiments/240315_scMPRA_LibAlpha_Wilkinson/screen_HSC/001_cellranger
+dir=/scMPRA_data_processing/002_screen_data_preprocessing/
 
-export PATH=/users/lvelten/sbeneyto/software/cellranger-6.0.1:$PATH
+export PATH=/path_to_cellranger/software/cellranger-6.0.1:$PATH
 
 cd "$dir"
 
 #Run CellRanger
-cellranger count --id=scMPRA9_filtered_bcs --libraries=library_scMPRA9_TAP.csv --transcriptome=/nfs/users/lvelten/project/SCG4SYN/Experiments/231127_scMPRA_LibAlpha_HSC/screen_HSC/001_cellranger/reference/refdata-gex-mm10-2020-A --feature-ref=feature_ref_filtered.csv
+cellranger count --id=scMPRA9_filtered_bcs --libraries=library_scMPRA9_TAP.csv --transcriptome=/path_to_reference_genome/refdata-gex-mm10-2020-A --feature-ref=example_feature_ref_filtered.csv
 

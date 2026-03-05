@@ -20,7 +20,7 @@ BC="$FASTQDIR/JRBETA_lib_03750AAF_TGGTCTACGT_R2_001.fastq.gz";
 
 OUT="/OUTPATH/"
 
-REF=/PATHTOREF/fasta_CRE_reference.fa
+REF=/PATHTOREF/example_fasta_CRE_reference.fa
 
 THREADS=1
 

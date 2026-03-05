@@ -18,7 +18,7 @@ editor_options:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
-knitr::opts_knit$set(root.dir = '~/cluster/project/SCG4SYN/Experiments/240314_LibBeta_association/')
+knitr::opts_knit$set(root.dir = "/path_to_association_file/")
 
 require(ggplot2)
 require(LSD)
@@ -30,8 +30,8 @@ library(dplyr)
 library(tidyverse)
 library(viridis)
 
-bc_crs_ass_beta <- read.csv(gzfile("~/cluster/project/SCG4SYN/Experiments/240314_LibBeta_association/iseq_outs/mapped_BIG.csv.gz"), sep = "\t")
-bc_crs_ass_alpha <- read.csv(gzfile("~/cluster/project/SCG4SYN/Experiments/230717_scMPRA_LibAlpha_K562/CRS_BC_ASS/iseq_outs/mapped_BIG.csv.gz"), sep = "\t")
+bc_crs_ass_beta <- read.csv(gzfile("./mapped_BIG.csv.gz"), sep = "\t")
+bc_crs_ass_alpha <- read.csv(gzfile("./mapped_alpha.csv.gz"), sep = "\t")
 
 bc_crs_ass_alpha$exp <-"Alpha"
 bc_crs_ass_beta$exp <- "Beta"
