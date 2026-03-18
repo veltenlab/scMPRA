@@ -1,0 +1,330 @@
+---
+title: "Enhancer detection"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figure1")
+
+
+library(tidyverse)
+library(Seurat)
+library(ComplexHeatmap)
+library(actuar) #for zero-truncated poisson 
+library(viridis)
+
+
+```
+
+In this .Rmd, we reproduce panel c and d from figure 1. For this we used
+*data* from two screens: 1) PoC screen in K562 cells 2) PoC screen in
+Hematopoietic Stem & Progenitor Cells (HSPCs)
+
+We will first compute rates for enhancer detection using a maximum
+likelihood approach, and afterwards plot two histograms that show
+absolute detected enhancer for the the two screens.
+
+# Enhancer Detection Rates for HSPCs
+
+For this we need to first obtain a count table that indicates in how
+many cells we detected 0 enhancers, in how many 1, ...
+
+```{r hsc data, include=TRUE}
+
+#Read in data 
+#loading seurat object 
+hsc_poc <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_hsc_seurat.rds")
+
+#loading preprocessed matched_gfp_guide_enhancer_counts file
+hsc_poc_guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_hsc_gfp_guide_enhancer_counts.rds")
+
+#count the number of cells from seurat object 
+no_cells_hsc_poc <- ncol(hsc_poc)
+
+#counts in how many cells we detected 0 enhancer, 1enhancer,  2 enhancers, ...
+count_hist <- c(no_cells_hsc_poc - sum(table(table(hsc_poc_guides$cell))), table(table(hsc_poc_guides$cell)))
+
+#names vector according to the number of detected enhancers per cell 
+names(count_hist) <- c("0","1", "2", "3", "4", "5")
+
+```
+
+Next, we write the function that determines the enhancer capture rate
+given a certain:
+
+-   lambda/MoI: the average number of molecules per cell, modeled with a
+    zero-truncated Poisson
+
+-   alpha/detection rate: the proabbility that each enhancer present in
+    a cell is actually observed
+
+This function evaluated how well different (MOI, detection) combinations
+explain the observed histogram `count_hist`.
+
+```{r hsc capture, include=TRUE}
+
+#determine capture rates for HSCs 
+hsc_presence_bc_positive_hist <- count_hist
+
+# Candidate MOI values to test.
+# In the Dixit-style notation, lambda = moi.
+searchgrid_moi <- seq(0.1, 5, by = 0.5)
+
+# Candidate detection/capture rates to test.
+# alpha = probability that any one true molecule is detected.
+searchgrid_detection <- seq(0.01, 0.99, by = 0.01)
+
+# Upper cutoff for the latent true molecule count M.
+# In principle M could be larger, but we truncate the sum at 20 for speed.
+max_molecules <- 20
+
+# ------------------------------------------------------------
+# Log-likelihood function
+#
+# Inputs:
+#   moi       = mean of the zero-truncated Poisson for true counts
+#   guide_hist = observed histogram of counts
+#   detection = per-molecule detection/capture probability
+#
+# Output:
+#   total log-likelihood of the histogram under the model
+# ------------------------------------------------------------
+likelihood <- function(moi, guide_hist, detection) {
+
+  # Compute model probability for each observed count k = 0, 1, 2, ...
+  probability_k <- sapply(0:(length(guide_hist) - 1), function(k) {
+
+    # To observe k molecules:
+    # - if k = 0, the true number m can be 1, 2, 3, ...
+    # - if k > 0, the true number m must be at least k
+    start_m <- ifelse(k == 0, 1, k)
+
+    # Marginalize over all possible true molecule counts m
+    # P(K = k) = sum_m P(M = m) * P(K = k | M = m)
+    sum(sapply(start_m:max_molecules, function(m) {
+
+      # P(M = m): true count comes from a zero-truncated Poisson
+      p_true_count <- dztpois(m, moi)
+
+      # P(K = k | M = m): observed count comes from binomial thinning
+      p_observed_given_true <- dbinom(k, size = m, prob = detection)
+
+      # Joint contribution for this value of m
+      p_true_count * p_observed_given_true
+    }))
+  })
+
+  # Histogram log-likelihood:
+  # if guide_hist[k+1] cells have observed count k, contribution is
+  # guide_hist[k+1] * log(P(K = k))
+  ll <- sum(guide_hist * log(probability_k))
+
+  return(ll)
+}
+
+```
+
+After defining th function, we can run it for the given parameters for
+HSPCs.
+
+```{r hsc compute and plot, include=TRUE}
+
+combined_likelihoods = sapply(searchgrid_moi, function (x) {
+  sapply(searchgrid_detection, function (y) {
+    likelihood(x, hsc_presence_bc_positive_hist, y)
+  })
+})
+
+T_combined_likelihoods = t(combined_likelihoods)
+colnames(T_combined_likelihoods) <- searchgrid_detection
+rownames(T_combined_likelihoods) <- searchgrid_moi
+
+new <- T_combined_likelihoods 
+new[new < -10000] <- -10000
+
+hsc_guide_cap <- Heatmap(new, cluster_rows = FALSE, cluster_columns = FALSE, column_title = "GFP Detection Rate", row_title = "MOI", col=magma(100))
+
+det_rate_enhancer = which(new==max(new), arr.ind=T)[2]
+MOI_guide = rownames(which(new==max(new), arr.ind=T))
+
+#save plot 
+#pdf("./004_hsc_det_rate.pdf",width=15/2.53,height=9/2.53)
+#hsc_guide_cap
+#dev.off()
+
+hsc_guide_cap
+
+```
+
+-   Estimated capture rate for HSPCs was: `r det_rate_enhancer`. 
+  
+-   Estimated MoI for HSPCs was: `r MOI_guide`.
+
+
+# Enhancer Detection Rates for K562s
+
+```{r k562 histo, include=TRUE}
+
+k562_poc <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_k562_seurat.rds")
+
+cells_to_keep <- WhichCells(k562_poc, expression = nFeature_RNA > 40 & nFeature_RNA < 200) 
+k562_poc <- subset(k562_poc, cells = cells_to_keep)
+
+#loading preprocessed matched_gfp_guide_enhancer_counts file
+k562_poc_guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_k562_gfp_guide_enhancer_counts.rds")
+
+#count the number of cells from seurat object 
+no_cells_k562_poc <- ncol(k562_poc)
+
+#counts in how many cells we detected 0 enhancers, 1 enhancer, ...
+count_hist <- c(no_cells_k562_poc - sum(table(table(k562_poc_guides$cell))), table(table(k562_poc_guides$cell)))
+
+#names vector according to the number of detected enhancers per cell 
+names(count_hist) <- as.character(0:(length(count_hist)-1))
+
+```
+
+After computing the count table, we are computing again the maximum
+likelihood. This time we adjust our searchgrid, since we expect a
+higher MoI for the K562 cells given how we infected the cells and their
+GFP+ rate.
+
+```{r k562 likelihood, include=TRUE}
+
+k562_presence_bc_positive_hist <- count_hist 
+
+# Candidate MOI values to test.
+searchgrid_moi <- seq(0.1, 15, by = 0.5)
+
+# Candidate detection/capture rates to test.
+searchgrid_detection <- seq(0.01, 0.99, by = 0.01)
+
+combined_likelihoods = sapply(searchgrid_moi, function (x) {
+  sapply(searchgrid_detection, function (y) {
+    likelihood(x, k562_presence_bc_positive_hist, y)
+  })
+})
+
+T_combined_likelihoods = t(combined_likelihoods)
+colnames(T_combined_likelihoods) <- searchgrid_detection
+rownames(T_combined_likelihoods) <- searchgrid_moi
+
+new <- T_combined_likelihoods 
+new[new < -30000] <- -30000
+
+k562_guide_cap <- Heatmap(new, cluster_rows = FALSE, cluster_columns = FALSE, column_title = "GFP Detection Rate", row_title = "MOI", col=magma(100))
+
+k562_det_rate_enhancer = which(new==max(new), arr.ind=T)[2]
+k562_MOI_enhancer = rownames(which(new==max(new), arr.ind=T))
+
+#plot
+
+#pdf("004_k562_det_rate.pdf", width = 15 / 2.54, height = 9 / 2.54)
+#k562_guide_cap
+#dev.off()
+
+k562_guide_cap
+
+```
+
+-   Estimated capture rate for HSPCs was: `r k562_det_rate_enhancer`.
+  
+-   Estimated MoI for HSPCs was: `r k562_MOI_enhancer`.
+
+# Histograms of absolute enhancer detections per Cell
+
+```{r histos, include=TRUE}
+
+# build tidy data (bin 0..N-1)
+df <- bind_rows(
+  tibble(type = "K562",
+         bin  = seq_along(k562_presence_bc_positive_hist)-1,
+         count = as.numeric(k562_presence_bc_positive_hist)),
+  tibble(type = "HSPC",
+         bin  = seq_along(hsc_presence_bc_positive_hist)-1,
+         count = as.numeric(hsc_presence_bc_positive_hist)
+))
+
+# collapse bins ≥20 into a single "20+" bin
+levels_bins <- c(as.character(0:9), "10+")
+df <- df %>%
+  mutate(bin_cap = pmin(bin, 10L)) %>%
+  group_by(type, bin_cap) %>%
+  summarise(count = sum(count), .groups = "drop") %>%
+  mutate(bin = factor(ifelse(bin_cap == 10, "10+", as.character(bin_cap)),
+                      levels = levels_bins))
+
+# order the types (K562 first)
+df <- df %>% mutate(type = fct_relevel(type, "K562", "HSPC"))
+
+# plot with your template style
+hist <- ggplot(df, aes(x = bin, y = count)) +
+  geom_col(width = 0.9) +
+  facet_wrap(~ type, ncol = 1) +
+  labs(x = "Number of presence barcodes", y = "# Cells",
+       title = "Barcode presence per cell") +
+  theme_classic() + 
+  theme(
+    axis.ticks = element_blank(),
+    axis.line = element_line(colour = "grey50"),
+    panel.grid = element_line(color = "#b4aea9"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(linetype = "dashed")
+  )
+
+hist
+
+#for saving:
+#pdf("./004_presense_barcode_histograms.pdf", width = 7 / 2.54, height = 9 / 2.54)
+#hist
+#dev.off()
+
+```
+
+# Summary Stats for the manuscript
+
+Last, im computing a couple of summary stats to get an overview about
+cell numbers and enhancer measurements in the respective cells.
+
+```{r summary stats, include=TRUE}
+
+#number of enhancer postivie cells 
+mult <- c(0,1,2,3,4,5)
+tot_obs_hscs <- sum(hsc_presence_bc_positive_hist*mult)
+enh_pos_hscs <- sum(hsc_presence_bc_positive_hist[-1])
+
+#number of cells
+no_cells_hsc_poc
+
+#percentage of positive cells 
+perc_enh_pos_hsc_cells <- enh_pos_hscs/no_cells_hsc_poc
+perc_enh_pos_hsc_cells
+
+#number of k562 observations 
+mult <- seq(0, length(k562_presence_bc_positive_hist)-1)
+tot_obs_k562 <- sum(k562_presence_bc_positive_hist*mult)
+
+enh_pos_k562 <- sum(k562_presence_bc_positive_hist[-1])
+
+no_cells_k562_poc
+
+##percentage of positive cells 
+perc_enh_pos_k562_cells <- enh_pos_k562/no_cells_k562_poc
+perc_enh_pos_k562_cells
+
+```

@@ -1,0 +1,349 @@
+---
+title: "Cofactor - enhancer relationships"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure3")
+
+library(patchwork)
+library(Seurat)
+library(viridis)
+library(ggpubr)
+library(tidyverse)
+library(readxl)
+
+```
+
+In this .Rmd, we reproduce panel g from Figure 3 and supplementary figures from Additional File 1 (Fig. 13, panel e and f).
+First, we read in the data. 
+
+```{r read in data , include=TRUE}
+
+#reading in the integrated expression data 
+integrated <- readRDS(file = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/integrated_seurat.rds")
+
+#subset to Library Alpha experiment 
+integrated <- subset(integrated, experiment == "Trp53")
+
+#read in enhancer count data from Lib Alpha screen 
+guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libAlpha_matched_gfp_guide_enhancer_counts.rds")
+
+```
+
+We again used the same projection-based strategy as in the previous analysis to relate scMPRA activity to whole-transcriptome gene expression. Briefly, a whole-transcriptome 5′ CITE-seq reference dataset from the same ex vivo hematopoietic cultures was projected onto the Trp53 scMPRA dataset using the `project_anyref()` approach from the TAP-seq framework (Schraivogel et al., 2020). This allowed transfer of cluster identities and corresponding transcriptome information to the scMPRA cells (see `/results/figures/figure3/expr_activity_correlations_panel_e_f.Rmd`), which we then used to test whether cluster-level Trp53 enhancer activity correlated with the expression of candidate cofactors.
+
+First, we read in the object and create a list of cofactors curated from literature, that doesnt contain TFs. 
+
+# Cofactor List 
+
+```{r, warning=FALSE}
+# --------------------------------------------------
+# 1. Load projected reference data and define cofactor set
+# --------------------------------------------------
+
+cite_seq_projected <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/cite_seq.rds")
+
+union_cofactors <- read_csv("../../data/cofactor_list.csv")
+union_cofactors <- union_cofactors$union_cofactors
+
+```
+
+To obtain comparable measurements between gene expression and enhancer activity, we summarized cofactor expression at the cluster level. Expression values from the projected CITE-seq dataset were averaged for each gene within each projected cluster, yielding mean expression estimates per gene–cluster pair. This cluster-level expression matrix served as the basis for downstream correlation analyses.
+
+```{r}
+# --------------------------------------------------
+# 2. Aggregate cofactor expression per projected cluster
+# --------------------------------------------------
+
+cofactors_only_seurat <- subset(cite_seq_projected, features = union_cofactors)
+
+mat <- GetAssayData(cofactors_only_seurat, assay = "RNA", layer = "data")
+
+meta_expr <- cofactors_only_seurat@meta.data %>%
+  mutate(
+    cell = colnames(cofactors_only_seurat),
+    SCT_snn_res.2 = projected.cluster) |>
+  select(cell, SCT_snn_res.2)
+
+result <- as.data.frame(mat) %>%
+  rownames_to_column("gene") %>%
+  pivot_longer(-gene, names_to = "cell", values_to = "expr") %>%
+  dplyr::left_join(meta_expr, by = "cell") %>%
+  dplyr::group_by(gene, SCT_snn_res.2) %>%
+  dplyr::summarise(mean_expr = mean(expr, na.rm = TRUE), .groups = "drop") %>%
+  left_join(dplyr::count(meta_expr, SCT_snn_res.2, name = "n_cells"), by = "SCT_snn_res.2") %>%
+  arrange(SCT_snn_res.2)
+```
+
+In parallel, Trp53 enhancer activity was summarized across clusters using the scMPRA data. We first summarized Trp53 enhancer activity at the level of cluster, motif affinity, and repeat number by calculating the mean GFP count for each combination. These activity summaries were then joined with cluster-level mean expression values of candidate cofactors derived from the projected transcriptome data. Finally, the combined table was reshaped into a long format in which each row represents one gene–cluster–affinity–repeat combination, enabling downstream correlation analyses between enhancer activity and gene expression.
+
+```{r}
+# --------------------------------------------------
+# 3. Aggregate Trp53 enhancer activity at different levels 
+# --------------------------------------------------
+
+guides <- guides |>
+  filter(TF.1 == "Trp53") |> 
+  mutate(cell = paste0("Trp53.", cell)) 
+
+meta_scmpra <- tibble(integrated@meta.data, cell = colnames(integrated))
+guides <- left_join(guides, meta_scmpra, by = "cell")
+
+# overall cluster-level Trp53 activity
+trp53_cluster_summary <- guides |>
+  dplyr::group_by(SCT_snn_res.2) |>
+  dplyr::summarise(mean_gfp = mean(gfp_count), .groups = "drop")
+
+cluster_level_result <- left_join(result, trp53_cluster_summary, by = "SCT_snn_res.2")
+
+# affinity x repeat stratified Trp53 activity
+sequence_trp53_cluster_summary <- guides |>
+  dplyr::group_by(SCT_snn_res.2, TF1.affinity, nrepeats) |>
+  dplyr::summarise(mean_gfp = mean(gfp_count), .groups = "drop") |>
+  pivot_wider(names_from = TF1.affinity, values_from = mean_gfp) |>
+  ungroup()
+
+result_wide <- result |>
+  pivot_wider(names_from = gene, values_from = mean_expr)
+
+sequence_cluster_level_result_for_regression <- left_join(
+  sequence_trp53_cluster_summary,
+  result_wide,
+  by = "SCT_snn_res.2"
+)
+
+sequence_cluster_level_result_for_regression_long_for_plot <- sequence_cluster_level_result_for_regression |>
+  pivot_longer(
+    cols = c(`0.25`, `0.5`, `0.89375`, `1`),
+    names_to = "affinity",
+    values_to = "mean_gfp"
+  )
+
+sequence_cluster_level_result_for_regression_long <- sequence_cluster_level_result_for_regression_long_for_plot |>
+  pivot_longer(
+    cols = -c("SCT_snn_res.2", "n_cells", "affinity", "mean_gfp", "nrepeats"),
+    names_to = "gene",
+    values_to = "mean_expr"
+  )
+
+```
+
+# Cofactor expression - Corrlations with Enhnacer activity 
+
+We next quantified the association between Trp53 enhancer activity and cofactor expression by computing Pearson correlations across clusters. This analysis was performed both globally and stratified by motif affinity and repeat number, allowing us to assess whether specific cofactors preferentially associate with activity of particular enhancer designs. P-values were adjusted using the Benjamini–Hochberg procedure to control for multiple testing.
+
+```{r}
+# --------------------------------------------------
+# 4. Correlation tables
+# --------------------------------------------------
+
+cof_corr_table <- cluster_level_result |>
+  dplyr::group_by(gene) |>
+  dplyr::summarise(
+    corelation = unname(cor.test(mean_gfp, mean_expr)$estimate),
+    p_val = cor.test(mean_gfp, mean_expr)$p.value,
+    .groups = "drop") |>
+  mutate(
+    p_adj_BH = p.adjust(p_val, method = "BH"),
+    p_adj_bonf = p.adjust(p_val, method = "bonferroni")) |>
+  arrange(p_adj_BH)
+
+cof_seq_corr_table <- sequence_cluster_level_result_for_regression_long |>
+  dplyr::group_by(gene, affinity, nrepeats) |>
+  dplyr::summarise(
+    corelation = unname(cor.test(mean_gfp, mean_expr)$estimate),
+    p_val = cor.test(mean_gfp, mean_expr)$p.value,
+    .groups = "drop") |>
+  mutate(
+    p_adj_BH = p.adjust(p_val, method = "BH"),
+    p_adj_bonf = p.adjust(p_val, method = "bonferroni")) |>
+  arrange(p_adj_BH)
+
+cof_corr_table$significant <- cof_corr_table$p_adj_BH < 0.05
+
+```
+
+This plots shows candidate cofactors according to the strength of their correlation with Trp53 enhancer activity across clusters. Each point represents one gene, and genes are ordered by their correlation coefficient, with significantly associated genes highlighted. The top positively correlated candidates are labeled to highlight potential cofactors whose expression most strongly tracks with Trp53 enhancer activity.
+
+```{r}
+
+# --------------------------------------------------
+# 6. Summary Cofactor correlations
+# --------------------------------------------------
+
+top_genes <- cof_corr_table %>%
+  arrange(desc(corelation)) %>%
+  slice_head(n = 5)
+
+corr_plot <- ggplot(
+  cof_corr_table, aes(x = reorder(gene, corelation), y = corelation, color = significant)) +
+  geom_point(size = 0.9) +
+  ylim(c(-0.6, 0.8)) +
+  ggrepel::geom_text_repel(
+    data = top_genes,
+    aes(label = gene),
+    color = "black",
+    size = 4,
+    segment.size = 0.1) +
+  scale_color_manual(values = c("darkgrey", "#36C37E")) +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "ArialMT"),
+    axis.ticks = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.text.x = element_blank())
+
+corr_plot
+
+```
+
+# STRING enrichment 
+
+To assess whether candidate cofactors showing significant correlations were functionally linked to Trp53, we annotated genes with interaction scores from the STRING protein–protein interaction database. These scores were used to determine whether significantly correlated genes were enriched for known Trp53 interactors.
+
+```{r}
+
+# --------------------------------------------------
+# 7. STRING annotation for plot.2 and plot.3
+# --------------------------------------------------
+
+forplot <- cof_seq_corr_table %>%
+  dplyr::group_by(gene) %>%
+  dplyr::summarise(
+    n_pos_sig = sum(p_adj_BH < 0.05 & corelation > 0, na.rm = TRUE),
+    n_neg_sig = sum(p_adj_BH < 0.05 & corelation < 0, na.rm = TRUE),
+    .groups = "drop") %>%
+  mutate(
+    signed_n = if_else(n_pos_sig > n_neg_sig, n_pos_sig, -n_neg_sig))
+
+#writeLines(forplot$gene, "genes_for_string.txt") #to paste in string interface 
+
+string.result <- subset(read.table("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/015_trp53_cofactor/string_interactions.tsv", header = TRUE), node1 == "Trp53")
+colnames(string.result)[2] <- "gene"
+
+forplot <- merge(forplot, string.result, all.x = TRUE)
+forplot$combined_score[is.na(forplot$combined_score)] <- 0
+
+cof_corr_table <- merge(cof_corr_table, string.result, all.x = TRUE)
+cof_corr_table$group <- with(cof_corr_table,
+  ifelse(significant,
+         ifelse(corelation > 0, "pos. sign.", "neg. sign."), "n.s."))
+
+```
+
+
+We next asked whether genes significantly correlated with Trp53 enhancer activity were enriched for known Trp53-associated interactors. To do this, genes were grouped according to the direction and significance of their correlation, and for each group we calculated the fraction of genes with a recorded STRING interaction score with Trp53. The resulting plot summarizes the proportion of Trp53-associated genes in each significance class, with point size indicating the number of genes per group.
+
+
+```{r}
+# --------------------------------------------------
+# 7. Enrichment plot 
+# --------------------------------------------------
+
+summarised <- cof_corr_table %>%
+  dplyr::group_by(group) %>%
+  dplyr::summarise(
+    perc.tp53.interactors = mean(!is.na(combined_score)),
+    n = n(),
+    .groups = "drop")
+
+enrichment_plot <- ggplot(summarised, aes(x = group, y = perc.tp53.interactors, size = sqrt(n))) +
+  geom_point() +
+  labs(x = "Significance group", y = "Mean Trp53 interaction score \n from STRING database") +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "ArialMT"),
+    axis.ticks = element_blank(),
+    panel.grid.major.y = element_blank())
+
+enrichment_plot
+
+```
+#Trim25 expression - enhancer activity 
+
+Trim25 showed the strongest positive correlation with Trp53 enhancer activity in the cofactor analysis. To further illustrate this relationship, we plotted cluster-level Trim25 expression against mean enhancer activity across motif affinity classes. This visualization highlights how Trim25 expression covaries with Trp53 enhancer activity across cellular states, supporting its potential role as a functional cofactor of Trp53.
+
+```{r}
+
+# --------------------------------------------------
+# 8. Majority-vote annotation for trim_plot
+# --------------------------------------------------
+
+meta_maj_vote <- integrated@meta.data |>
+  filter(experiment == "Trp53") |>
+  dplyr::group_by(SCT_snn_res.2) |>
+  dplyr::summarise(maj_vote = names(which.max(table(final_annotation))), .groups = "drop")
+
+# --------------------------------------------------
+# 9. trim_plot
+# --------------------------------------------------
+
+trim25_to_plot <- sequence_cluster_level_result_for_regression_long_for_plot |>
+  select(mean_gfp, Trim25, affinity, SCT_snn_res.2) |>
+  dplyr::group_by(affinity, SCT_snn_res.2) |>
+  dplyr::summarise(
+    mean_mean = mean(mean_gfp),
+    trim25_cluster_summary = mean(Trim25),
+    .groups = "drop"
+  )
+
+trim <- left_join(trim25_to_plot, meta_maj_vote, by = "SCT_snn_res.2")
+
+#define the colors 
+another_pal<- c("Eo/Baso/Mast" = "#C43E2F", "Early Eo/Baso/Mast" =  "#F26B55" , "CD55+ immature" = "#E78C64", "Meg/Ery" = "#EDB93E", 
+                "Monocytes late" = "#6C9F8C","Monocytes cycling" = "#217F5C",
+                "Monocytes early" = "#33C38E",
+                "Neutrophils" = "#25625E", "Early Myelocytes" = "#A0F2E8", "Monocyte precursor" = "#54BFB7", "Unclear/Excluded" = "grey", "Neutrophil precursor" = "#9ab1a9", "CD55- immature" = "#d2f9f4", 
+                "EMPP" = "#ff4dff","LMPP" = "#9999ff","HSC/MPP cycling" = "#7a0099", "HSC/MPP" = "#9900cc"  )
+
+trim_plot <- ggplot(
+  trim |> filter(maj_vote != "Unclear/Excluded"),
+  aes(x = trim25_cluster_summary, y = mean_mean)) +
+  geom_point(aes(color = as.factor(maj_vote)), size = 2) +
+  geom_smooth(method = "lm", aes(group = 1), se = FALSE, color = "black") +
+  stat_cor(method = "pearson", aes(group = 1)) +
+  facet_grid(~ affinity, scales = "free_y") +
+  scale_color_manual(values = another_pal) +
+  labs(x = "Mean Trim25 Expression", y = "Mean activity") +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "ArialMT"),
+    axis.ticks = element_blank(),
+    panel.grid.major.y = element_blank(),
+    legend.position = "bottom"
+  )
+
+trim_plot
+
+```
+
+Save plots. 
+
+```{r, eval = FALSE}
+
+ggsave("./002_mean_trp53_string_score_signi_groups.pdf", plot.2, width = 7, height = 7, device = "pdf", units = "cm")
+ggsave("./003_cofactor_correlations_ranking.pdf", plot.3, width = 15, height = 10, device = "pdf", units = "cm")
+ggsave("./003_trim25_expr_correlation_aff.pdf", trim_plot, width = 18, height = 11, device = "pdf", units = "cm")
+
+```
+
+
+

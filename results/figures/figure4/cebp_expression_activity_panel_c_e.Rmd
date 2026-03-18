@@ -1,0 +1,256 @@
+---
+title: "Cebp Expression - Acitivty relationships"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure4")
+
+library(RColorBrewer)
+library(patchwork)
+library(Seurat)
+library(tidyverse)
+library(ggpubr)
+
+```
+
+In this .Rmd, we reproduce panel c and panel e from figure 4, in which we look at the relationship between the expression of Cebpe, Cebpd, and Cebpa and the activity of the synthetic enhancers. 
+
+Read in the data. 
+
+```{r read in data , include=TRUE}
+#read in enhancer count data from Lib Beta screen 
+guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libBeta_matched_gfp_guide_enhancer_counts.rds")
+
+#reading in the integrated expression data 
+integrated <- readRDS(file = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/integrated_seurat.rds")
+```
+
+# Expression of Cebpa, Cebpe, Cebpd
+
+```{r}
+plots <- FeaturePlot(integrated, features = c("Cebpa", "Cebpd", "Cebpe"),
+                     order = TRUE)  #,raster = TRUE)
+
+# Apply the color scale to all plots
+plots <- lapply(plots, function(p) {
+  p +
+    scale_colour_gradientn(colours = brewer.pal(n =100, name = "GnBu")) +
+    theme_void() +
+    theme(legend.position = "bottom")
+    
+})
+# Combine and show the plots (using patchwork or cowplot)
+cebps <- wrap_plots(plots, ncol = 3)
+
+cebps
+```
+
+Save the plot. 
+
+```{r, eval = FALSE}
+ggsave("./005_cebp_umaps.png", cebps, width=25, height=10, device = "png", units = "cm")  
+```
+
+# Correlations for Enhancer activity prediction 
+
+In this analysis, we investigate how Cebpa enhancer activity relates to endogenous gene expression across cellular states. We quantify the correlation between enhancer activity (stratified by motif affinity and repeat number groups) and the expression of selected transcription factors (Cebpa, Cebpd, Cebpe). This approach allows us to identify gene–enhancer relationships and assess how motif architecture influences regulatory activity in different cellular contexts.
+
+First, for each gene and cluster, we compute the mean expression of Cebpa, Cebpd, Cebpe, resulting in a cluster-level expression matrix.
+
+```{r}
+# --------------------------------------------------
+# Extract mean cluster-level expression for selected genes
+# --------------------------------------------------
+
+genes_of_interest <- c("Cebpa", "Cebpd", "Cebpe")
+
+mat <- GetAssayData(integrated, assay = "RNA")
+mat <- mat[genes_of_interest, ]
+
+meta <- integrated@meta.data %>%
+  tibble(cell = colnames(integrated))
+
+result <- as.data.frame(mat) %>%
+  rownames_to_column("gene") %>%
+  pivot_longer(-gene, names_to = "cell", values_to = "expr") %>%
+  left_join(meta, by = "cell") %>%
+  dplyr::group_by(gene, SCT_snn_res.2) %>%
+  dplyr::summarise(mean_expr = mean(expr, na.rm = TRUE), .groups = "drop") %>%
+  left_join(dplyr::count(meta, SCT_snn_res.2, name = "n_cells"), by = "SCT_snn_res.2") %>%
+  arrange(SCT_snn_res.2)
+
+```
+
+Enhancer activity is summarized per cluster, stratified by motif affinity and repeat number.
+
+```{r}
+# --------------------------------------------------
+# Summarize Cebpa enhancer activity by cluster, affinity, and repeat group
+# --------------------------------------------------
+
+guides <- guides %>%
+  filter(TF == "Cebpa") %>%
+  dplyr::mutate(
+    cell = paste0("Cebpa.", cell), 
+    affinitynum = ifelse(affinitynum == "0.89375", "1", affinitynum),
+    nrepeat_group = ifelse(
+      nrepeats %in% c(1, 2), "low",
+      ifelse(nrepeats %in% c(3, 4), "med", "high")))
+
+meta <- tibble(integrated@meta.data, cell = colnames(integrated))
+guides <- left_join(guides, meta)
+
+sequence_cebpa_cluster_summary <- guides %>%
+  dplyr::group_by(SCT_snn_res.2, affinitynum, nrepeat_group) %>%
+  dplyr::summarise(mean_gfp = mean(gfp_count), .groups = "drop") %>%
+  pivot_wider(names_from = affinitynum, values_from = mean_gfp) %>%
+  ungroup()
+
+```
+
+We then merge the cluster-level enhancer activity with the corresponding gene expression summaries.
+
+```{r}
+# --------------------------------------------------
+# Join enhancer activity with gene expression
+# --------------------------------------------------
+
+result_wide <- result %>%
+  pivot_wider(names_from = gene, values_from = mean_expr)
+
+sequence_cluster_level_result_for_regression <- left_join(sequence_cebpa_cluster_summary, result_wide)
+
+sequence_cluster_level_result_for_regression_long <- sequence_cluster_level_result_for_regression %>%
+  pivot_longer(
+    cols = c(`0.1`, `0.25`, `0.5`, `0.75`, `1`),
+    names_to = "affinity",
+    values_to = "mean_gfp"
+  ) %>%
+  pivot_longer(
+    cols = -c("SCT_snn_res.2", "n_cells", "affinity", "mean_gfp", "nrepeat_group"),
+    names_to = "gene",
+    values_to = "mean_expr"
+  )
+```
+
+For each gene, affinity class, and repeat group, we compute the correlation between enhancer activity and gene expression across clusters.
+
+```{r}
+# --------------------------------------------------
+# Correlate enhancer activity with gene expression
+# --------------------------------------------------
+
+cof_seq_corr_table <- sequence_cluster_level_result_for_regression_long %>%
+  dplyr::group_by(gene, affinity, nrepeat_group) %>%
+  dplyr::summarise(
+    corelation = unname(cor.test(mean_gfp, mean_expr)$estimate),
+    p_val = cor.test(mean_gfp, mean_expr)$p.value,
+    .groups = "drop") %>%
+  dplyr::mutate(
+    p_adj_BH = p.adjust(p_val, method = "BH"),
+    p_adj_bonf = p.adjust(p_val, method = "bonferroni"),
+    nrepeat_group = factor(nrepeat_group, levels = c("low", "med", "high")),
+    affinity = factor(affinity, levels = c("0.1", "0.25", "0.5", "0.75", "1"))) %>%
+  arrange(p_adj_BH)
+```
+
+Finally, we can plot the correlations as a heatmap. 
+
+```{r}
+
+correlation_plot <- ggplot(cof_seq_corr_table, aes(x = nrepeat_group, y = affinity, fill = corelation)) +
+  geom_tile() +
+  geom_text(aes(label = ifelse(p_adj_BH < 0.05, "*", "")), size = 9, color = "white") +
+  scale_fill_viridis_c(option = "mako") +
+  facet_grid(~ gene) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)
+  )
+
+correlation_plot
+```
+
+Save the plot. 
+
+```{r, eval = FALSE}
+ggsave("./007_cebpa_correlations_.pdf", correlation_plot, width = 12, height = 14, device = "pdf", units = "cm")
+```
+
+# Non-linear relationship between activity and expression for medium affinity enhancer
+
+Next we are reproducing panel d from supplementary figure 15. This is an example for a significant non-linear relationship between activity and Cebpd expression for medium affinity enhancer. 
+
+```{r}
+# From the long-format table, keep only the variables needed for plotting
+# and restrict the analysis to the gene Cebpd
+
+plot4 <- sequence_cluster_level_result_for_regression_long |> 
+  select(mean_gfp, affinity, SCT_snn_res.2, nrepeat_group, gene, mean_expr) |> 
+  filter(gene == "Cebpd") |> 
+  dplyr::group_by(SCT_snn_res.2, affinity, nrepeat_group) |> 
+  dplyr::summarise(mean_mean = mean(mean_gfp),
+                   cebpd_cluster_summary = mean(mean_expr))
+
+#object for majority vote / cell type annotation 
+meta_maj_vote <- integrated@meta.data |> 
+  dplyr::filter(experiment == "Cebpa") |> 
+  dplyr::group_by(SCT_snn_res.2) |> 
+  dplyr::summarise(maj_vote = names(which.max(table(final_annotation))))
+
+example_to_plot <- left_join(plot4, meta_maj_vote)
+```
+
+Plot the example. 
+
+```{r}
+
+#define colors 
+another_pal<- c("Eo/Baso/Mast" = "#C43E2F", "Early Eo/Baso/Mast" =  "#F26B55" , "CD55+ immature" = "#E78C64", "Meg/Ery" = "#EDB93E", 
+                "Monocytes late" = "#6C9F8C","Monocytes cycling" = "#217F5C",
+                "Monocytes early" = "#33C38E",
+                "Neutrophils" = "#25625E", "Early Myelocytes" = "#A0F2E8", "Monocyte precursor" = "#54BFB7", "Unclear/Excluded" = "grey", "Neutrophil precursor" = "#9ab1a9", "CD55- immature" = "#d2f9f4", 
+                "EMPP" = "#ff4dff","LMPP" = "#9999ff","HSC/MPP cycling" = "#7a0099", "HSC/MPP" = "#9900cc"  )
+
+cebpd_0.5_med <- ggplot(example_to_plot |> 
+                          filter(nrepeat_group == "med",
+                                 affinity == "0.5", 
+                                 maj_vote != "Unclear/Excluded"), aes(x = cebpd_cluster_summary, y = mean_mean)) +
+  geom_point(aes(color = as.factor(maj_vote)), size = 2) +          # colours per maj_vote
+  geom_smooth(method = "loess", aes(group = 1), se = FALSE, color = "black") +# one line per facet
+  stat_cor(method = "pearson", aes(group = 1)) +           # one r per facet
+  facet_wrap(~ affinity, scales = "free_x") + 
+  scale_color_manual(values = another_pal) + 
+  scale_y_log10() +   
+  labs( x = "Mean Cebpd expression", y = "Mean activity") + 
+  theme_minimal() + 
+  theme(text=element_text(family="ArialMT"),  
+        axis.ticks = element_blank(),
+        panel.grid.major.y = element_blank(), 
+        legend.position = "bottom")
+
+cebpd_0.5_med
+
+```
+
+Save the plot. 
+
+```{r, eval = FALSE}
+ggsave("./009_cebpd_expr_correlations.pdf", cebpd_0.5_med, width = 12, height = 10, device = "pdf", units = "cm")
+```
+

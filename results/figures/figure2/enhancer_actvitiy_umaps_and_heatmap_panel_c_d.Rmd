@@ -1,0 +1,276 @@
+---
+title: "Enhancer Activity Umaps & Heatmap"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure2")
+
+library(tidyverse)
+library(patchwork)
+library(Seurat)
+library(viridis)
+library(ComplexHeatmap)
+library(circlize) #for colorRamp2
+
+```
+
+In this .Rmd, we reproduce panel c and d from figure 2. In panel c, we plot the enhancer activity of two selected examples on the umap coordinates of the integrated Gene expression data from the Lib Alpha & Lib Beta screen. In panel d, we visualized scaled enhancer activity of the Lib Alpha screen using a heatmap. 
+
+# Enhancer activity Umaps
+
+```{r read in data , include=TRUE}
+
+#reading in the integrated expression data 
+integrated <- readRDS(file = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/integrated_seurat.rds")
+
+#read in enhancer count data from Lib Alpha screen 
+guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libAlpha_matched_gfp_guide_enhancer_counts.rds")
+
+```
+
+To plot enhancer activity on the umaps, we need to first extract the umap coordinates from the integrated seurat object per cell. Second, we will join this with the enhancer activity values per cell based on the cell labels and visualize the gfp UMI count. 
+
+
+```{r extract umap, include=TRUE}
+
+#get the umap coord & join it with enhancer count matrix  
+umapCoord <- as.data.frame(Embeddings(object = integrated[["umap"]])) %>% tibble(cell = colnames(integrated))
+
+#fix cell annotations in umapCoord so that i can merge with guides table
+umapCoord <- umapCoord |> 
+  filter(grepl("^Trp53\\.", cell)) |> 
+  mutate(cell = str_remove(cell, "^[^.]*\\."))
+
+guides_umap <- left_join(guides, umapCoord)
+
+```
+
+Next, we are visualizing two enhancers of choice . 
+
+```{r viz inert, include=TRUE}
+
+#first im extracting the list of Sequence names for the different enhancers 
+seqs <- sort(unique(guides_umap$Seqname))
+
+#this is the random DNA control i chose, because it has a nice coverage across the uamp 
+tf_subset <- guides_umap %>% 
+  filter(Seqname == "Control_inert_seq_7735") %>% 
+  arrange(gfp_count)
+
+inert_single <- ggplot(tf_subset, aes(x = umap_1, y = umap_2)) + 
+  geom_point(data = umapCoord, aes(x= umap_1, y = umap_2), size = 0.01, color = "lightgrey") + 
+  geom_point(aes(x = umap_1, y = umap_2, color = log10(gfp_count+1)), size = 0.5) +
+  theme_classic() + 
+  scale_color_viridis(option = "viridis", trans = "log10") +
+  labs(title = "inert") + 
+  facet_wrap(nrepeats~TF1.affinity+Seqname) + 
+  theme(legend.position = "bottom")
+
+inert_single
+
+```
+
+Now, I'm visualizing an enhancer that contains 3 Gata and 3 Cebpa motifs, that shows cell type-specific activity and iswell covered across diverse cell states/types. 
+
+```{r viz function, include=TRUE}
+
+tf_subset <- guides_umap %>% 
+  filter(Seqname == seqs[55] ) %>% 
+  arrange(gfp_count)
+
+cebpa_single <- ggplot(tf_subset, aes(x = umap_1, y = umap_2)) + 
+  geom_point(data = umapCoord, aes(x= umap_1, y = umap_2), size = 0.01, color = "lightgrey") + 
+  geom_point(aes(x = umap_1, y = umap_2, color = log10(gfp_count+1)), size = 0.5) +
+  theme_classic() + 
+  scale_color_viridis(option = "viridis", trans = "log10") +
+  labs(title = "Gata2-Cebpa") + 
+  facet_wrap(nrepeats~TF1.affinity+Seqname) + 
+  theme(legend.position = "bottom")
+
+both <- (cebpa_single + inert_single)
+#ggsave("./011_example_umap_gata2_cebpa_inert.png", both, width=12, height=12, device = "png", units = "cm")  
+
+cebpa_single 
+
+```
+
+# Enhancer activity Heatmap 
+
+For Figure 2d, we visualized enhancer activity for all enhancer sequences, excluding the random DNA controls, in a clustered heatmap. Activity values were scaled per enhancer sequence across cell types, with enhancer sequences shown in columns and cluster or cell-type activities shown in rows. This representation highlights the relative activity pattern of each enhancer, making it easier to see in which cell type a given sequence is most active compared with the others.
+
+First, we need to perform some data wrangling to get it into the right shape and get rid of unneeded cells. 
+
+``` {r heatmap data prep, include=TRUE}
+
+#subset seurat to Library Alpha screen 
+integrated_trp53 <- subset(integrated, experiment == "Trp53") 
+meta_cells <- integrated_trp53@meta.data %>% tibble(cell = colnames(integrated_trp53))
+
+
+#Idents(integrated) <- integrated$final_annotation
+# change cell annotation, so that i can merge with seurat meta data 
+guides <- guides |> 
+  dplyr::mutate(cell = paste0("Trp53.", cell))
+
+#mergewith meta data to obtain cell type annotation 
+guides <- left_join(guides, meta_cells %>% select(final_annotation, cell)) 
+
+guides <- guides |> 
+  mutate(#TF_combo = ifelse(TF_combo == "Gata1Cebpa", "Gata2Cebpa", TF_combo),
+         cell = paste0("Trp53.", cell)) |> 
+  filter(TF.1 != "inert", 
+         !is.na(final_annotation) & !(final_annotation %in% c("EMPP", "HSC/MPP", "HSC/MPP cycling", "LMPP", "Unclear/Excluded"))) #because these are cell types present in the second Library Beta screen or excluded 
+
+
+``` 
+
+``` {r heatmap aggregate, include=TRUE}
+
+#aggregate counts at seqname, cluster level 
+crs.level.summary <- guides %>%
+  dplyr::group_by(TF.1, TF.2, TF1.affinity, TF2.affinity, nrepeats, spacer, CRS, Seqname, ctrls, design_rep, Library, ControlFor, sequence,
+                  TF1.orientation, TF2.orientation, TF_combo, final_annotation) %>%
+  dplyr::summarise(
+    mean_gfp = mean(ifelse(is.na(gfp_count), 0 , gfp_count)),
+    n_guide = length(gfp_count)
+  )
+
+#prepare matrix for heatmap 
+gfp_wide <- crs.level.summary %>% 
+  dplyr::ungroup() %>% 
+  select(mean_gfp, final_annotation, Seqname) %>% 
+  pivot_wider(names_from = final_annotation, values_from = mean_gfp) 
+
+```
+
+Here im defining all colors for the TF combinations and cell types. 
+
+``` {r heatmap define colors, include=TRUE}
+
+TF_colors <- c(
+  "Cebpa"       = "#2E8B8B",  
+  "Fli1"        = "#C47AC0", 
+  "Gata1"       = "#88B04B",  
+  "Gata2"       = "#5CB8B2",  
+  "Gata2Cebpa"  = "#EE8468", 
+  "Gfi1b"       = "#EFC94C",  
+  "Gfi1bGata1"  = "#6CBF84",  
+  "Spi1"        = "#D46A6A",  
+  "Spi1Fli1"    = "#E88B3C",  
+  "Trp53"       = "#4477AA",  
+  "inert"       = "#C5C5C5"   
+)
+
+
+another_pal<- c("Eo/Baso/Mast" = "#C43E2F", 
+                "Eo/Baso/Mast Progenitors" =  "#F26B55" , 
+                "CD55+ immature" = "#E78C64", 
+                "Meg/Ery" = "#EDB93E", 
+                "Monocytes late" = "#6C9F8C",
+                "Monocytes cycling" = "#217F5C",
+                "Monocytes early" = "#33C38E",
+                "Neutrophils" = "#25625E", 
+                "Early Myelocytes" = "#A0F2E8", 
+                "Monocyte precursor" = "#54BFB7", 
+                "Unclear/Excluded" = "grey", 
+                "Neutrophil precursor" = "#9ab1a9", 
+                "CD55- immature" = "#d2f9f4", 
+                "EMPP" = "#ff4dff",
+                "LMPP" = "#9999ff",
+                "HSC/MPP cycling" = "#7a0099", 
+                "HSC/MPP" = "#9900cc")
+
+```
+
+First, we build the heatmap matrix. 
+
+``` {r heatmap matrix, include=TRUE}
+
+## 0) Build the matrix first (rows = cell types, cols = Seqname)
+mat <- scale(t(as.matrix(gfp_wide %>% select(-Seqname))))   # your scaled_columns_mat
+
+#name them accordingly 
+colnames(mat) <- gfp_wide$Seqname
+rownames(mat) <- colnames(gfp_wide)[-1]
+
+```
+
+Next we need to map the column and row annotations for the heatmap plotting.  
+
+``` {r heatmap annotation, include=TRUE}
+
+## 1) COLUMN annotation (TF per Seqname) — align by column names
+tf_map <- crs.level.summary %>% distinct(Seqname, TF_combo)
+tf_vec <- tf_map$TF_combo[match(colnames(mat), tf_map$Seqname)]
+TF_colors_use <- TF_colors[intersect(names(TF_colors), unique(tf_vec))]
+
+ha_col <- HeatmapAnnotation(
+  TF = factor(tf_vec, levels = names(TF_colors_use)),
+  col = list(TF = TF_colors_use),
+  annotation_legend_param = list(title = "TF")
+)
+
+
+## 2) ROW annotation (cell type per row) — align by row names
+row_celltypes <- rownames(mat)  # these are the cell types in row order
+pal_use <- another_pal[intersect(names(another_pal), unique(row_celltypes))]
+
+row_anno <- rowAnnotation(
+  celltype = factor(row_celltypes, levels = names(pal_use)),
+  col = list(celltype = pal_use)
+)
+
+```
+
+Here, i perform a distance-based clustering for the heatmap. 
+
+``` {r plot heatmap, include=TRUE}
+
+scaled_columns_mat <- scale(t(as.matrix(gfp_wide %>% select(-Seqname))))
+scaled_row_mat <- t(scale(as.matrix(gfp_wide %>% select(-Seqname))))
+
+col_fun <- colorRamp2(c(-1, -0.5, 0, 1, 2), c("#84D4B0","#f0f9e8", "white","#F7DA8D", "#EF8A34")) # "#84D4B0"
+dropout_gray <- "#D3D3D3"
+
+# Draw heatmap
+ht = Heatmap(
+  mat, 
+  top_annotation = ha_col,
+  right_annotation = row_anno, 
+  col = col_fun,
+  na_col = dropout_gray, 
+  column_title = "Synthetic Enhancers",
+  column_title_side = "bottom", 
+  clustering_distance_rows = "pearson", 
+  column_split = 2,
+  row_split = 3
+)
+
+draw(ht)
+
+```
+
+This saves the plot. 
+
+``` {r save heatmap, include=TRUE, eval = FALSE}
+
+pdf("./012_heatmap_activity.pdf", width = 12, height = 8)
+
+draw(ht)
+
+dev.off()

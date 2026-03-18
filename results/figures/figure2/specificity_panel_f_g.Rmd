@@ -1,0 +1,434 @@
+---
+title: "Cell type-specificity of CREs"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure2")
+
+library(ROCR)
+library(patchwork)
+library(viridis)
+library(tidyverse)
+library(Seurat)
+
+```
+
+In this .Rmd, we reproduce panel f and g from figure 2. This analysis quantifies cell type specificity of CREs by asking whether GFP activity in gRNA+ cells can distinguish one cell type from all others.
+
+## Overall idea
+
+For each CRE × cell type combination, we fit a binomial logistic regression:
+
+-   Response variable: whether a cell belongs to the target cell type (TRUE/FALSE)
+-   Predictor: gfp_count
+-   Input cells: only cells carrying the CRE of interest
+-   Excluded: gRNA-negative cells are removed beforehand
+
+This allows us to compute a ROC curve and AUC for each CRE in each cell type.
+
+Interpretation: A high AUC means that GFP activity for that CRE is enriched in that cell type relative to the others, meaning that the enhancer is cell type-specific. 
+
+# ROC curves 
+
+Read in data. 
+
+```{r load data}
+
+#reading in the integrated expression data 
+integrated <- readRDS(file = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/integrated_seurat.rds")
+
+#read in enhancer count data from Lib Alpha screen 
+guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libAlpha_matched_gfp_guide_enhancer_counts.rds")
+
+```
+
+Prepare data for joining enhancer counts with meta data from integrated seurat object. 
+
+```{r join}
+
+guides <- guides |> 
+  mutate(cell = paste0("Trp53.", cell))
+
+meta_cells <- integrated@meta.data %>% tibble(cell = colnames(integrated))
+
+#merge celltype with guides 
+guides <- left_join(guides, meta_cells |> select(cell, final_annotation, annotation_Trp53)) 
+
+#map clustering annotation to the final_annotation cell types with majority vote 
+
+#maj_vote <- meta_cells |> 
+#  group_by(annotation_Trp53) |> 
+#  summarise(maj_vote = names(which.max(table(final_annotation))))
+  
+```
+
+Defining colors for the different cell types. 
+
+```{r colors}
+
+TF_colors <- c(
+  "Cebpa"       = "#2E8B8B",
+  "Fli1"        = "#C47AC0", 
+  "Gata1"       = "#88B04B",  
+  "Gata2"       = "#5CB8B2",  
+  "Gata2Cebpa"  = "#EE8468", 
+  "Gfi1b"       = "#EFC94C",  
+  "Gfi1bGata1"  = "#6CBF84",  
+  "Spi1"        = "#D46A6A",  
+  "Spi1Fli1"    = "#E88B3C",  
+  "Trp53"       = "#4477AA",  
+  "inert"       = "#C5C5C5"   
+)
+
+
+another_pal<- c("Eo/Baso/Mast" = "#C43E2F", 
+                "Eo/Baso/Mast Progenitors" =  "#F26B55" , 
+                "CD55+ immature" = "#E78C64", 
+                "Meg/Ery" = "#EDB93E", 
+                "Monocytes late" = "#6C9F8C",
+                "Monocytes cycling" = "#217F5C",
+                "Monocytes early" = "#33C38E",
+                "Neutrophils" = "#25625E", 
+                "Early Myelocytes" = "#A0F2E8", 
+                "Monocyte precursor" = "#54BFB7", 
+                "Unclear/Excluded" = "grey", 
+                "Neutrophil precursor" = "#9ab1a9", 
+                "CD55- immature" = "#d2f9f4", 
+                "EMPP" = "#ff4dff",
+                "LMPP" = "#9999ff",
+                "HSC/MPP cycling" = "#7a0099", 
+                "HSC/MPP" = "#9900cc")
+
+
+```
+
+This approach works best with clustering of the Trp53-data (not the clustering of the integrated data). This is precomputed in the seurat object in the meta data annotation_Trp53.
+
+Before computing the ROC curves, we need to perform a filtering on the enhancer data. 
+
+```{r guide filtering}
+
+#filter cells that have the same CRE multiple times (different BCs) 
+# Filter out cells with duplicate Seqname
+filtered_guides <- guides |> 
+  group_by(cell, Seqname) |>                  
+  filter(n() == 1) |>                         
+  ungroup() |> 
+  filter(!is.na(annotation_Trp53))
+
+```
+
+For every CRE:
+
+1.  Subset all cells carrying that CRE
+2.  For every cell type, create a binary label:
+      TRUE if the cell belongs to that cell type, 
+      FALSE otherwise
+
+Fit a logistic regression:
+
+```{r roc curves}
+
+#list of cell types and CREs to iterate over 
+cell_types <- filtered_guides |> pull(annotation_Trp53) |> unique()
+CREs <- filtered_guides |> pull(Seqname) |> unique()
+
+resolution_level <- "annotation_Trp53"
+
+#i will run a logistic regression for each of the celltypexCRE combos
+#its a binomial logistic regression bc variable to predict is binary 
+# Nested sapply: Iterate over cell types and CREs
+roc_data <- do.call(rbind, lapply(CREs, function(CRE) {
+  # Subset the data
+  subset_data <- filtered_guides |>
+    filter(Seqname == CRE) |> 
+    dplyr::rename(cell_types = !!sym(resolution_level))
+  
+  do.call(rbind, lapply(cell_types, function(type) {
+    # Check if there is data for the current cell type
+    if (nrow(subset_data[subset_data$cell_types == type, ]) < 10) {
+      return(NULL)  # Skip this cell type if no data is available
+    }
+    
+    # Create the respective label vector
+    label <- subset_data$cell_types == type
+    model <- glm(label ~ subset_data$gfp_count, family = binomial(link = "logit"))
+    
+    # Predict the response probabilities
+    pred_resp <- predict(model, type = "response")
+    pr <- prediction(pred_resp, label)
+    prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+    auc <- performance(pr, measure = "auc")
+    auc <- auc@y.values[[1]]
+    
+    # Collect TPR, FPR, CellType, CRE, and AUC for the current iteration
+    data.frame(
+      FPR = prf@x.values[[1]],
+      TPR = prf@y.values[[1]],
+      CellType = type,
+      Seqname = CRE,
+      AUC = auc
+    )
+  }))
+}))
+
+#add majority vote to this table 
+#roc_data <- left_join(roc_data, maj_vote |> dplyr::rename(CellType = annotation_Trp53))
+
+```
+
+The ROC curve for each GRE is plotted across all cell types. Each plot is saved as an individual PDF in the specified output folder. 
+
+```{r roc curves pdfs}
+
+output_folder <- "./roc_curves"
+
+# Split data by CRE and save individual plots
+for (CRE in CREs) {
+  CRE_data <- roc_data[roc_data$Seqname == CRE, ]  # Subset data for current CRE
+  
+  # Create the plot
+  plot <- ggplot(CRE_data, aes(x = FPR, y = TPR, color = CellType)) +
+    geom_line(size = 1) +
+    theme_minimal() +
+    labs(
+      title = paste("ROC Curve for CRE:", CRE),
+      x = "False Positive Rate",
+      y = "True Positive Rate",
+      color = "Cell Type"
+    ) +
+    theme(legend.position = "right")
+  
+  # Save the plot as a PDF
+  file_name <- file.path(output_folder, paste0("ROC_CRE_", CRE, ".pdf"))
+  ggsave(filename = file_name, plot = plot, device = "pdf", width = 7, height = 5)
+}
+
+cat("ROC plots have been saved to:", output_folder, "\n")
+
+```
+
+# Specificity 
+
+Now we are creating the specificity plot of panel f. For each CRE, we identify the cell type with the highest ROC AUC and defined this as its most specific cell type. We then calculated the mean GFP activity in that cell type and compared it to the overall mean activity across all cell states. The resulting plot summarizes each CRE by its specificity (maximum AUC) and its relative activity enrichment in the most specific cell type.
+
+```{r specificity plot}
+
+#first one has to determine the cluster per seq with highest AUC 
+#problem here is that there is not an average for every element in every cell type i need to do all other cells 
+
+specificity <- roc_data %>%
+  dplyr::group_by(Seqname) %>% 
+  dplyr::summarise(max_auc_cluster = CellType[which.max(AUC)],
+                   max_auc = max(AUC),
+                   mean_auc_other = mean(AUC[CellType != max_auc_cluster])) |> 
+  arrange(desc(max_auc))
+
+
+filtered_guides <- left_join(filtered_guides, specificity %>% select(Seqname, max_auc_cluster, max_auc)) 
+
+#average in max cluster = activity
+activity <- filtered_guides |> 
+  filter(cell_types == max_auc_cluster) |> 
+  group_by(CRS, Seqname, TF.1, TF.2, TF1.affinity, TF2.affinity, nrepeats, spacer, ctrls, design_rep, Library, ControlFor, sequence, TF1.orientation, TF2.orientation, TF_combo, max_auc_cluster) %>%
+  dplyr::summarise(av_activity_in_max_AUC_cluster = mean(gfp_count))
+
+#mean actcell_types#mean activity overall cell states
+meta_CREs <- filtered_guides %>%
+  dplyr::group_by(CRS, Seqname, TF.1, TF.2, TF1.affinity, TF2.affinity, nrepeats, spacer, ctrls,design_rep, Library, ControlFor, sequence, TF1.orientation, TF2.orientation) %>%
+  dplyr::summarise(
+    mean_gfp = mean(gfp_count))
+
+final_plot <- left_join(specificity, activity)
+
+#adding back in all the CRE metadata 
+final_plot <- left_join(final_plot, meta_CREs)
+
+final_plot <- final_plot %>% 
+  dplyr::mutate(specificity = max_auc, 
+                activity_compared_to_rest =  av_activity_in_max_AUC_cluster - mean_gfp) 
+
+
+```
+
+Now we are ready to plot the specificity against the activity difference
+
+```{r plot specificity}
+
+specificity_plot <- ggplot(final_plot, aes(x = activity_compared_to_rest, y = specificity)) +
+  geom_point(size = 3, aes(color = TF_combo)) +
+  scale_color_manual(values = TF_colors, guide = guide_legend(override.aes = list(size = 3))) +
+  labs(
+    x = "Activity Difference \n max cluster-mean(all clusters)",
+    y = "Specificity \n (AIC of max cluster)"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "ArialMT", size = 10),
+    axis.ticks = element_blank(),
+    panel.grid.major.y = element_blank(),
+    # --- legend inset ---
+    legend.position = c(0.98, 0.02),                 # (x,y) in [0,1] relative to panel
+    legend.justification = c("right", "bottom"),     # anchor the legend’s corner
+    legend.background = element_rect(fill = scales::alpha("white", 0.85)),
+    legend.key = element_rect(fill = NA, colour = NA),
+    legend.title = element_blank()                   # optional: hide title
+  ) +
+  coord_cartesian(clip = "off")                      # keeps legend visible if near edges
+
+specificity_plot
+
+```
+
+
+# Cell type-specific CRES (examples)
+Now, we are going to plot umaps and ROC curves for selected, highly cell type-specific elements. 
+
+```{r extract top list}
+
+#first we extract the list Seqnames from most specific to least specfici 
+top_specific <- final_plot %>% 
+  ungroup() %>%
+  arrange(desc(specificity)) |> 
+  pull(Seqname) 
+
+#these are two examples that i chose 
+top_specific_chosen_examples <- top_specific[c(1, 5, 6)]
+
+
+```
+
+Extract umap coordinates from the seurat object for plotting and merge with enhancer activity data for the respective cell. 
+
+```{r umap merge}
+#get the umap coord & join it with guide 
+umapCoord <- as.data.frame(Embeddings(object = integrated[["umap"]])) %>% tibble(cell = colnames(integrated))
+
+umapCoord <- umapCoord |> 
+  filter(grepl("^Trp53\\.", cell)) 
+
+filtered_guides <- left_join(filtered_guides, umapCoord)
+
+#Subsetting doesnt work for some reason needs to be fixed. 
+activity_umap <- function(seq_name) {
+  tf_subset <- filtered_guides %>% 
+    filter(Seqname == seq_name) %>% 
+    arrange(gfp_count)
+  max_auc_cluster <- tf_subset$max_auc_cluster %>% unique()
+  TF_combo <- tf_subset$TF_combo %>% unique()
+  
+  plo <- ggplot(tf_subset, aes(x = umap_1, y = umap_2)) + 
+  geom_point(data = umapCoord, aes(x= umap_1, y = umap_2), size = 0.01, color = "lightgrey") + 
+  geom_point(aes(x = umap_1, y = umap_2, color = log10(gfp_count+1)), size = 0.5) +
+  theme_void() + 
+  scale_color_viridis(option = "viridis", trans = "log10") +
+  labs(title = paste0(TF_combo,",", max_auc_cluster)) + 
+  facet_wrap(nrepeats~TF1.affinity+Seqname) + 
+  theme(legend.position = "bottom")
+
+  return(plo)
+}
+
+# Apply the function to each sequence name in `top_specific`
+plots <- lapply(top_specific_chosen_examples, activity_umap)
+
+umaps <- (plots[[1]] | plots[[2]] | plots[[3]])
+
+umaps
+
+```
+
+Next we are plotting the respective ROC curves for these three elements. 
+
+```{r}
+
+#Subsetting doesnt work for some reason needs to be fixed. 
+plot_rocs <- function(seq_name) {
+  CRE_subset <- roc_data[roc_data$Seqname == seq_name,]
+  
+  plo <- ggplot(CRE_subset, aes(x = FPR, y = TPR, color = CellType)) + 
+    geom_line() + 
+    theme_minimal() +
+    labs(x = "False Positive Rate", y = "True Positive Rate", color = "Cell Type") + 
+      theme_minimal() +
+      theme(
+        text=element_text(family="ArialMT", size=10),
+        axis.ticks = element_blank(),
+        panel.grid.major.y = element_blank())
+  
+  return(plo)
+}
+
+# Apply the function to each sequence name in `top_specific`
+top_rocs <- lapply(top_specific_chosen_examples, plot_rocs)
+
+
+```
+
+Now, plot corresponding ROC curves and save plots. 
+
+```{r}
+
+rocs <- (top_rocs[[1]] | top_rocs[[2]] | top_rocs[[3]]) + 
+  plot_layout(guides = "collect")
+
+rocs
+  
+```
+
+Save the plots. 
+
+```{r save plots, eval = FALSE}
+
+ggsave("./013_scatter_specificity.pdf", specificity_plot, width= 12, height=10, device = "pdf", units = "cm")  
+ggsave("./013_umap_specificity.pdf", umaps, width= 20, height=8, device = "pdf", units = "cm")  
+ggsave("./013_roc_specificity.pdf", rocs, width= 20, height=10, device = "pdf", units = "cm")  
+
+```
+
+# Cell unspecific examples (random DNA controls)
+
+For comparison, we plot ROC curves of random DNA controls that we expect to show a cell type-unspecific activity behavior. These curves we show in supplemental figure 12.  
+
+```{r plot inert rocs, eval = TRUE}
+
+#for supplement (inert sequences) 
+#inert rocs
+
+inert <- final_plot %>% 
+  ungroup() %>%
+  filter(TF_combo == "inert") |> 
+  pull(Seqname) 
+
+inert_roc_plots <- lapply(inert, plot_rocs)
+
+inerts <- wrap_plots(inert_roc_plots, ncol = 3) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+
+inerts
+
+```
+
+Saving the plots. 
+
+```{r save intert rocs, eval = FALSE}
+
+ggsave("./014_rocs_inerts.pdf", inerts, width= 18, height=22, device = "pdf", units = "cm")
+
+```

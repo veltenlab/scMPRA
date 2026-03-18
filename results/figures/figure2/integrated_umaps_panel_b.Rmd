@@ -1,0 +1,195 @@
+---
+title: "Integrated Umap & Marker Genes"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure2")
+
+library(tidyverse)
+library(patchwork)
+library(Seurat)
+library(RColorBrewer)
+library(reticulate)
+library(magrittr)
+```
+
+In this .Rmd, we reproduce panel b from figure 2. 
+For this we visualized the integrated the targeted Gene expression data from Library Alpha & Library Beta screen (panel b) & Additional File 1 Figure 9. 
+
+# Marker Genes 
+
+```{r read in data , include=TRUE}
+
+#load file with LibAlpha & BetaScreen integrated Gex
+integrated <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/integrated_seurat.rds")
+
+```
+
+First, we plot relevant marker genes to annotate the cell types of the ex vivo HSPC cultures. Interesting marker genes are Ctss, S100a9, Gata1, Gata2, Mpo, Cd34, H2eb1, Cebpa, Cebpe, Kel, Spi1, Fli1, Runx1, Meis1, Myb, Myc, Hbbbt, Klf1, Klf4, Itga2b, Mki67, Fcer1a, Mcpt8. 
+
+```{r plot marker genes, include=TRUE, warning=FALSE}
+#this is a subselection of the interesting marker genes 
+plots <- FeaturePlot(integrated,
+                     features = c("Ctss", "S100a9", "Mpo", "Cebpe", "Cd34", "Kit", "Mecom", "Myb",
+                                  "Gata2", "Mcpt8", "Hbb-bt", "Vwf"),
+                     order = TRUE)  #,raster = TRUE)
+
+# Apply the color scale to all plots
+plots <- lapply(plots, function(p) {
+  p +
+    scale_colour_gradientn(colours = brewer.pal(n = 9, name = "GnBu")) +
+    theme_void() + 
+    NoLegend()
+})
+# Combine and show the plots (using patchwork or cowplot)
+marker_genes_panel <- wrap_plots(plots, ncol = 4)
+
+#ggsave("./008_hspcs_markers.png", marker_genes_panel, width=16, height=12, device = "png", units = "cm")  
+
+marker_genes_panel
+
+
+```
+
+# Cell type annotation 
+
+Here we are plotting the labels on the annotated umap.
+
+```{r plot cell type annotation, include=TRUE}
+
+#cell type annotation 
+set.seed(456)
+
+another_pal<- c("Eo/Baso/Mast" = "#C43E2F", 
+                "Eo/Baso/Mast Progenitors" =  "#F26B55" , 
+                "CD55+ immature" = "#E78C64", 
+                "Meg/Ery" = "#EDB93E", 
+                "Monocytes late" = "#6C9F8C",
+                "Monocytes cycling" = "#217F5C",
+                "Monocytes early" = "#33C38E",
+                "Neutrophils" = "#25625E", 
+                "Early Myelocytes" = "#A0F2E8", 
+                "Monocyte precursor" = "#54BFB7", 
+                "Unclear/Excluded" = "grey", 
+                "Neutrophil precursor" = "#9ab1a9", 
+                "CD55- immature" = "#d2f9f4", 
+                "EMPP" = "#ff4dff",
+                "LMPP" = "#9999ff",
+                "HSC/MPP cycling" = "#7a0099", 
+                "HSC/MPP" = "#9900cc")
+
+
+cell_types <- DimPlot(integrated, group.by = c("final_annotation"), na.value = "grey", label=F, raster = FALSE) + scale_color_manual(values = another_pal)
+
+#ggsave("./008_hspcs_celltype_anno.png", cell_types, width=16, height=12, device = "png", units = "cm")  
+
+cell_types
+
+```
+
+
+# Integration using Scanorama 
+
+Here I provide the code that was used to integrate the cells from the Library Alpha (Trp53) and the Library Beta (Cebpa) screen and obtain the integrated Seurat object that we use above and that is shared on figshare. 
+
+```{r prepare and load data , include=TRUE, eval = FALSE}
+#activate conda env 
+use_condaenv("scanorama")
+scanorama <- import('scanorama')
+
+#integrate load the two different seurat objects from the LibAlpha (Trp53) and LibBeta screen (Cebpa)
+Cebpa <- readRDS("/users/lvelten/project/SCG4SYN/Experiments/250528_scMPRA_LibGamma_HSC/screen_HSC/002_analysis/scMPRA11_qced_all_layers.RDS")
+Trp53 <- readRDS("/users/lvelten/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/001_integration/scMPRA4_11qced_all_layers_wo9.RDS")
+
+```
+
+Now, we can perform the scanorama integration based on the genes that we selected for the targeting panel (Additional Files). 
+
+```{r scanorama integration, eval = FALSE}
+
+#1. perform scanorama integration
+cebpa_matrix <- GetAssayData(Cebpa)
+nonzero_cebpa <- rowMeans(cebpa_matrix > 0)
+
+trp53_matrix <- GetAssayData(Trp53)
+nonzero_trp53 <- rowMeans(trp53_matrix > 0)
+
+use_genes <- read.csv("/users/lvelten/project/SCG4SYN/Experiments/220923_5TAP_panel_scMPRA/HSC_panel/HSC_panel_selected_genes.csv") %>% unlist() %>% as.vector()
+use_genes <- intersect(intersect(use_genes, rownames(cebpa_matrix)), rownames(trp53_matrix))
+
+
+for_scanorama <- list(t(as.matrix(trp53_matrix[use_genes,])), t(as.matrix(cebpa_matrix[use_genes,])))
+
+integrated.corrected.data <- scanorama$correct(for_scanorama, lapply(for_scanorama, colnames),return_dimred=TRUE, return_dense=TRUE, verbose = TRUE)
+
+```
+
+Next, we assemble a new seurat object. For each of the two joined seurat objects we do three things: 
+1.    extract raw count matrix from RNA assay
+2.    keeps only targeted genes
+3.    renames the cell barcodes by prefixing them with the dataset name
+
+```{r scanorama newseurat, eval = FALSE}
+
+#2. assemble a new seurat object
+seurat_objects <- list(Trp53 = Trp53, Cebpa = Cebpa)
+RNA_counts <- lapply(names(seurat_objects), function(n) { out <- GetAssayData(seurat_objects[[n]],layer = "counts")[use_genes,]; colnames(out) <- paste0(n, ".", colnames(out)); out })
+names(for_scanorama) <- c("Trp53", "Cebpa")
+RNA_scaled <- lapply(names(for_scanorama), function(n) { out <- t(for_scanorama[[n]]); colnames(out) <- paste0(n, ".", colnames(out)); out }) #uses SCT scaling in RNA
+
+RNA <- CreateAssay5Object(counts = do.call(cbind, RNA_counts), data = do.call(cbind, RNA_scaled), min.cells = 0, min.features = 0)
+
+integrated <- CreateSeuratObject(RNA, "RNA")
+scanorama_matrix <- do.call(rbind, integrated.corrected.data[[1]])
+rownames(scanorama_matrix) <- colnames(RNA)
+integrated[["scanorama"]] <- CreateDimReducObject(embeddings = scanorama_matrix, assay = "RNA", key = "SCAN_")
+integrated$experiment <- gsub("\\..+", "", colnames(integrated))
+integrated <- RunUMAP(integrated, reduction = "scanorama", dims = 1:100)
+
+```
+
+Last, we fix the metadata for the new joined seurat object and save it as a new 
+
+```{r scanorama metadata, eval = FALSE}
+
+#3. Add metadata
+metadata_trp53 <- Trp53@meta.data
+metadata_cepba <- Cebpa@meta.data
+clusterings <- union(colnames(metadata_cepba), colnames(metadata_trp53))
+clusterings <- clusterings[grepl("SCT_snn", clusterings)]
+clustering_matrix <- matrix(NA, nrow = ncol(integrated), ncol = length(clusterings), dimnames = list(colnames(integrated), clusterings))
+clustering_matrix[grepl("Trp53", rownames(clustering_matrix)), clusterings[clusterings %in% colnames(metadata_trp53)]] <- as.matrix(metadata_trp53[,clusterings[clusterings %in% colnames(metadata_trp53)]])
+clustering_matrix[grepl("Cebpa", rownames(clustering_matrix)), clusterings[clusterings %in% colnames(metadata_cepba)]] <- as.matrix(metadata_cepba[,clusterings[clusterings %in% colnames(metadata_cepba)]])
+integrated <- AddMetaData(integrated, clustering_matrix)
+
+celltype_anno <- matrix(NA,nrow = ncol(integrated), ncol = 2,dimnames = list(colnames(integrated), c("annotation_Trp53", "annotation_Cebpa")))
+celltype_anno[grepl("Trp53", rownames(clustering_matrix)), "annotation_Trp53"] <- as.character(metadata_trp53$cell_types)
+celltype_anno[grepl("Cebpa", rownames(clustering_matrix)), "annotation_Cebpa"] <- as.character(metadata_cepba$celltype_anno)
+integrated <- AddMetaData(integrated, celltype_anno)
+
+#Annotate cell types 
+integrated <- FindNeighbors(integrated, reduction =  "scanorama", dims = 1:100)
+integrated <- FindClusters(integrated)
+
+#saveRDS(integrated, file = "./integrated.RDS")
+
+# png("integrated_umaps.png",width=1400,height=800, res=100)
+# DimPlot(integrated, group.by = c("experiment","annotation_Trp53", "annotation_Cebpa", "ident"), na.value = "grey", label=T, ncol=2)
+# dev.off()
+
+```

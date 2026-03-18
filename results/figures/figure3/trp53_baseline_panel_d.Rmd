@@ -1,0 +1,219 @@
+---
+title: "Trp53 Baseline & activity"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure3")
+
+library(tidyverse)
+library(patchwork)
+library(Seurat)
+library(viridis)
+
+```
+
+In this .Rmd, we reproduce panel d from figure 3. This involved two steps: 
+
+1.    Compute cell type-specific baseline enhancer activities from random DNA background controls
+2.    Resolve enhancer activity x sequence strength (affinity x number of motif repeats) relationship across cell types
+
+# Baseline activity
+
+```{r read in data , include=TRUE}
+
+#reading in the integrated expression data 
+integrated <- readRDS(file = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/integrated_seurat.rds")
+
+#read in enhancer count data from Lib Alpha screen 
+guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libAlpha_matched_gfp_guide_enhancer_counts.rds")
+
+```
+
+Merge seurat object meta data with enhancer count table `guides`. 
+
+```{r merge meta with guides}
+
+#lets get the GRE counts 
+meta_cells <- integrated@meta.data %>% tibble(cell = colnames(integrated)) 
+
+guides <- guides |> 
+  dplyr::mutate(cell = paste0("Trp53.", cell))
+  
+guides <- left_join(guides, meta_cells)
+
+```
+
+Define cell type colors. 
+
+```{r cell type colors}
+
+another_pal<- c("Eo/Baso/Mast" = "#C43E2F", 
+                "Eo/Baso/Mast Progenitors" =  "#F26B55" , 
+                "CD55+ immature" = "#E78C64", 
+                "Meg/Ery" = "#EDB93E", 
+                "Monocytes late" = "#6C9F8C",
+                "Monocytes cycling" = "#217F5C",
+                "Monocytes early" = "#33C38E",
+                "Neutrophils" = "#25625E", 
+                "Early Myelocytes" = "#A0F2E8", 
+                "Monocyte precursor" = "#54BFB7", 
+                "Unclear/Excluded" = "grey", 
+                "Neutrophil precursor" = "#9ab1a9", 
+                "CD55- immature" = "#d2f9f4", 
+                "EMPP" = "#ff4dff",
+                "LMPP" = "#9999ff",
+                "HSC/MPP cycling" = "#7a0099", 
+                "HSC/MPP" = "#9900cc")
+
+```
+
+Here, we are computing some more qc measure from the seurat object for our baseline estimation and in order to understand if baseline activity is correlated with some of these qc measures or overall cellular features. 
+
+```{r qc measures}
+#extract some qc metric from seurat object 
+approach_a <- integrated@meta.data %>%
+  filter(experiment == "Trp53") |> 
+  group_by(SCT_snn_res.2) %>%
+  summarise(
+    rnaCount         = mean(nCount_RNA,      na.rm = TRUE),
+    rnaCount.sd      = sd(nCount_RNA,        na.rm = TRUE),
+    rnaFeature       = mean(nFeature_RNA,    na.rm = TRUE),
+    rnaFeature.sd    = sd(nFeature_RNA,      na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+Next, we aggreagate the enhancer activity per enhancer for each cluster separately at cluster resolution SCT_snn_res.2. 
+
+```{r aggregate CRSlevel}
+
+crs.level.summary <- guides %>%
+  group_by(CRS, Seqname, TF.1, TF.2, TF1.affinity, TF2.affinity, nrepeats, spacer, ControlFor, sequence,
+           TF1.orientation, TF2.orientation, design_rep, Library, ctrls, SCT_snn_res.2) %>%
+  dplyr::summarise(
+    ncells = n_distinct(cell),
+    nguides = n_distinct(guide_id),
+    mean_gfp = mean(gfp_count, na.rm = TRUE),
+    median_gfp = median(gfp_count, na.rm = TRUE),
+    mean_guide = mean(guide_count, na.rm = TRUE),
+    median_guide = median(guide_count, na.rm = TRUE),
+    sd_gfp = sd(gfp_count, na.rm = TRUE),
+    ngfp = n_distinct(gfp_id),
+    nFeatures = mean(nFeature_RNA), 
+    nCount = mean(nCount_RNA)
+  )
+
+```
+
+We merge enhancer-level activity summaries with cluster-level sequencing statistics and compute the mean GFP activity per enhancer and cluster. To stabilize variance and enable visualization of low activity values, GFP activity is log-transformed using a small pseudocount equal to half of the smallest non-zero mean GFP value.
+
+```{r}
+#join the qc/overall cell features with aggregated enhancer data 
+crs.level.summary <- merge(crs.level.summary, approach_a)
+
+#here we are scaling enhancer signal to relative cluster-wide GFP levels 
+#crs.level.summary$norm.gfp <- crs.level.summary$mean_gfp / crs.level.summary$gfpCount
+
+#this divides enhancer activity by the average number of detected RNA features 
+crs.level.summary$norm.rnaFeatures <- crs.level.summary$mean_gfp / crs.level.summary$rnaFeature
+
+#computes a pseudocount for the log transfomation, by finding the smalles positive GFP mean  
+min.raw <- min(crs.level.summary$mean_gfp[crs.level.summary$mean_gfp>0])
+
+#log transform enhancer activity 
+crs.level.summary$logm = with(crs.level.summary, log(mean_gfp + min.raw/2))
+
+#to obtain cell types for each cluster we are doing a majority vote 
+formerge <- plyr::ddply(data.frame(SCT_snn_res.2 = integrated$SCT_snn_res.2, annotation = integrated$final_annotation), "SCT_snn_res.2",plyr::summarise, final_annotation = names(which.max(table(annotation))), n_cells = length(SCT_snn_res.2))
+
+#and this we are merging with the crs.level.summary object 
+crs.level.summary <- merge(crs.level.summary, formerge)
+
+#filter cell types that are not in screen 
+crs.level.summary <- crs.level.summary |> 
+  filter(!final_annotation %in% c("Unclear/Excluded", "EMPP", "LMPP", "HSC/MPP", "HSC/MPP cycling")) 
+
+```
+
+Next step is to compute a baseline enhancer activity from the random DNA controls. 
+
+```{r baseline computation}
+#compute the baseline 
+baseline <- crs.level.summary |> 
+  filter(TF.1 == "inert") |> 
+  group_by(SCT_snn_res.2) |> 
+  summarise(baseline = median(mean_gfp, na.rm = TRUE), .groups = "drop") |> 
+  left_join(approach_a, by = "SCT_snn_res.2")  |> 
+  left_join(formerge,   by = "SCT_snn_res.2")
+
+```
+
+Next, we can plot if baseline enhancer activity is correlated with the average number of genes captured per cell (aggregated at the cluster level).  
+
+```{r baseline against rna features }
+ggplot(baseline, aes(x = baseline, y = rnaFeature, group = SCT_snn_res.2, color = final_annotation)) +
+  geom_point() +
+  scale_color_manual(values = another_pal)
+
+```
+
+
+Here we need to find a solution, this is not a good clustering. 
+
+```{r}
+baseline_summary <- baseline %>%
+  left_join(formerge, by = intersect(names(baseline), names(formerge))) %>%  # see note below
+  group_by(final_annotation) %>%
+  summarise(
+    value = log(mean(baseline + min.raw/2, na.rm = TRUE)),
+    affinity = 0,
+    .groups = "drop")
+
+```
+
+
+```{r plot baseline and celltype}
+
+tp53 <- subset(crs.level.summary, TF.1 == "Trp53" & TF.2 == "")
+
+baseline_plot <- ggplot(tp53, aes(x = TF1.affinity * nrepeats, y = logm, group = final_annotation , color = final_annotation)
+) +
+  geom_point(data = baseline_summary, aes(x = affinity, y = value), size = 3) + 
+  geom_smooth(se = FALSE, span = 1, linewidth = 1.5) +
+  scale_color_manual(values = another_pal) +
+  theme_minimal() +
+  theme(text=element_text(family="ArialMT"),  
+        axis.ticks = element_blank(),
+        panel.grid.major.y = element_blank()) + 
+        #legend.position = "none") + 
+  geom_vline(xintercept = c(0.5, 3.25, 6), linetype = 3, linewidth = 1) +
+  labs(x = "Sequence Strength", y = "Log GFP/cell") 
+
+baseline_plot
+
+```
+
+Save plot. 
+
+```{r save plot, eval = FALSE}
+
+setwd("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/figure3/")
+ggsave("./004_lars_plot_baseline.pdf", lars_plot, width = 10, height = 15, device = "pdf", units = "cm")
+
+```
+

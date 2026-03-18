@@ -1,0 +1,286 @@
+---
+title: "CEBPmotifs"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure4")
+
+library(patchwork)
+library(Seurat)
+library(tidyverse)
+library(universalmotif)
+library(ggseqlogo)
+
+```
+
+In this .Rmd, we reproduce panel the motif analyses for C/EBP from panel a, b, and c. 
+First, we read in the enhancer data from scMPRA screen with Library Beta containing 72 Cebp sequences. 
+
+```{r read in data , include=TRUE}
+
+#read in enhancer count data from Lib Beta screen 
+guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libBeta_matched_gfp_guide_enhancer_counts.rds")
+
+```
+
+# C/EBPa motif for synthetic enhancers
+
+We first visualize the C/EBPa motif that was used to generate the synthetic enhancer sequences. The motif was retrieved from the CIS-BP transcription factor motif database (ID: M00994_2.00-Cebpa), and motif instances were sampled from this position weight matrix during sequence design.
+
+```{r}
+pwms_used <- readRDS("../../data/motifs_from_froemel_et_al.rds")
+
+#this is the cebpa motif used for sampling
+m <- pwms_used$`M00994_2.00-Cebpa`@motif
+
+#visualize the logo 
+database_logo <- ggseqlogo(m, method = "bits")
+database_logo
+
+```
+
+Save plot. 
+
+```{r, eval = FALSE}
+ggsave("./001_cebpa_motif_used_for_synthetic_enhancers.pdf", database_logo, width =7, height = 4, device = "pdf", units = "cm")
+```
+
+# Motifs & Sequence probabilites for synthetic enhancer motifs
+
+To examine the sequence composition of the synthetic C/EBP enhancers, we extracted the motif instances embedded in the designed sequences. The uppercase letters in the sequence strings correspond to the sampled motif occurrences and were parsed to reconstruct the motif instances present in each enhance (as we did for Trp53).
+
+```{r}
+# subset Cebpa sequences
+cebpa_seqs <- guides |>
+  select(Seq, Seqname, TF, nrepeats, affinitynum) |>
+  filter(TF == "Cebpa") |>
+  distinct()
+```
+
+From these instances, we computed position-specific nucleotide frequencies separately for each affinity class and visualized them as base-frequency plots and sequence logos.
+
+```{r}
+# extract uppercase motif instances from each sequence
+result <- cebpa_seqs %>%
+  select(Seq, affinitynum) |>
+  mutate(upper_runs = str_extract_all(Seq, "[A-Z]+")) %>%
+  transmute(
+    Seq,
+    affinitynum,
+    motif1 = map_chr(upper_runs, ~ pluck(.x, 1, .default = NA_character_)),
+    motif2 = map_chr(upper_runs, ~ pluck(.x, 2, .default = NA_character_)),
+    motif3 = map_chr(upper_runs, ~ pluck(.x, 3, .default = NA_character_)),
+    motif4 = map_chr(upper_runs, ~ pluck(.x, 4, .default = NA_character_)),
+    motif5 = map_chr(upper_runs, ~ pluck(.x, 5, .default = NA_character_)),
+    motif6 = map_chr(upper_runs, ~ pluck(.x, 6, .default = NA_character_))
+  )
+
+# convert motif columns into long format
+motifs_long <- result %>%
+  pivot_longer(
+    starts_with("motif"),
+    values_to = "motif",
+    values_drop_na = TRUE
+  ) %>%
+  mutate(motif = toupper(motif)) %>%
+  filter(str_detect(motif, "^[ACGT]+$"))
+```
+
+This code converts the extracted motif sequences into position weight matrices (PWMs) for each affinity class. First, each motif is split into individual nucleotides, and the occurrence of each base is counted at every motif position within each affinity group. These counts are then normalized to probabilities, yielding position-specific base probabilites, which are finally reshaped into a wide matrix format suitable for downstream visualization.
+
+
+```{r}
+
+# --------------------------------------------------
+# PWM per affinity class
+# --------------------------------------------------
+
+pfm <- motifs_long %>%
+  mutate(letters = str_split(motif, "")) %>%
+  unnest_longer(letters, values_to = "pos_letters", indices_to = "position") %>%
+  dplyr::count(affinitynum, position, pos_letters, name = "count") %>%
+  complete(affinitynum, position, pos_letters = c("A", "C", "G", "T"), fill = list(count = 0)) %>%
+  arrange(affinitynum, position)
+
+pc <- 0
+
+pwm_tidy <- pfm %>%
+  group_by(affinitynum, position) %>%
+  mutate(prob = (count + pc) / sum(count + pc)) %>%
+  ungroup()
+
+pwm_wide <- pwm_tidy %>%
+  select(affinitynum, position, base = pos_letters, prob) %>%
+  pivot_wider(names_from = base, values_from = prob) %>%
+  arrange(affinitynum, position)
+```
+
+Next, we can plot the PPMs (Position probability matrix) for each affinity separately. 
+
+```{r}
+
+# sequence logos per affinity
+plots <- pwm_wide %>%
+  group_split(affinitynum) %>%
+  lapply(function(df) {
+    aff <- unique(df$affinitynum)
+    mat <- as.matrix(t(df %>% select(A, C, G, T)))
+    colnames(mat) <- df$position
+
+    ggseqlogo(mat, method = "prob") +
+      ggtitle(paste("Affinity =", aff))
+  })
+
+wrapped_motifs <- wrap_plots(plots, ncol = 3)
+wrapped_motifs
+
+```
+
+To assess how well the observed motif instances match the reference C/EBP motif, we computed sequence probabilities for each motif using the original CIS-BP PWM. For each motif instance, the probability was calculated by multiplying the position-specific nucleotide probabilities defined by the reference motif. This provides a quantitative measure of how closely each observed motif resembles the canonical C/EBP binding site.
+
+```{r, eval = TRUE}
+# --------------------------------------------------
+# Score observed motifs against the reference Cebpa PWM
+# --------------------------------------------------
+
+# Keep one copy of each unique motif together with its affinity class
+used_motifs_list <- motifs_long |>
+  select(affinitynum, motif) |>
+  distinct()
+
+# Ensure that the reference PWM has bases in a consistent row order
+m <- m[c("A", "C", "G", "T"), ]
+
+# Function to calculate the sequence probability of each motif
+# under the reference PWM by multiplying the per-position base probabilities
+score_prob <- function(seqs, pwm_prob) {
+  pwm <- as.matrix(pwm_prob)[c("A", "C", "G", "T"), , drop = FALSE]
+  nuc_to_row <- c(A = 1, C = 2, G = 3, T = 4)
+  
+  sapply(seqs, function(s) {
+    s <- toupper(s)
+    b <- strsplit(s, "")[[1]]
+    
+    # Skip motifs with unexpected length
+    if (length(b) != ncol(pwm)) return(NA_real_)
+    
+    # Convert bases to row indices in the PWM
+    r <- nuc_to_row[b]
+    
+    # Skip motifs containing invalid characters
+    if (any(is.na(r))) return(NA_real_)
+    
+    # Multiply probabilities across all motif positions
+    prod(pwm[cbind(r, seq_len(ncol(pwm)))])
+  })
+}
+```
+
+Here we are applying the above written function, and prepare the data frame. 
+
+```{r, eval = TRUE}
+# Calculate PWM-based probabilities for all observed motifs
+probs <- score_prob(used_motifs_list$motif, m)
+
+# Store the motif probabilities in a tibble for joining
+probs_tibble <- tibble(
+  motif = names(probs),
+  probs = probs
+)
+
+# Add the probability scores back to the motif tables
+motifs_long <- left_join(motifs_long, probs_tibble, by = "motif")
+used_motifs_list <- left_join(used_motifs_list, probs_tibble, by = "motif")
+```
+
+We then summarized these motif probabilities across affinity classes by computing the mean probability for all motif instances within each group. This allows comparison of how strongly motifs from different affinity classes match the reference motif. 
+
+```{r, eval = FALSE}
+# Average motif probabilities within each affinity class
+summary_probs <- used_motifs_list |>
+  group_by(affinitynum) |>
+  summarise(mean_prob = mean(probs), .groups = "drop")
+
+probs <- score_prob(used_motifs_list$motif, m)
+
+#make it a mergable tibble
+probs_tibble <- tibble(motif = names(probs), 
+                       probs = probs) 
+
+motifs_long <- left_join(motifs_long, probs_tibble)
+used_motifs_list <- left_join(used_motifs_list, probs_tibble)
+
+#if there is more than one motif i take the average: 
+summary_probs <- used_motifs_list |> 
+  dplyr::group_by(affinitynum) |>  
+  dplyr::summarise(mean_prob = mean(probs))
+
+```
+
+Finally, we visualized the average motif probabilities for each affinity class. This plot provides an intuitive overview of how closely the designed motifs in each class resemble the reference C/EBP motif, with higher values indicating stronger agreement with the chosen refernce CEBPA motif.
+
+```{r, eval = FALSE}
+probs <- ggplot(summary_probs, aes(y = as.factor(affinitynum), x = mean_prob)) + 
+  geom_col() + 
+  theme_minimal() + 
+  theme(text=element_text(family="ArialMT"),  
+        axis.ticks = element_blank(),
+        panel.grid.major.y = element_blank())
+
+probs
+
+```
+
+Save plot. 
+
+```{r, eval = FALSE}
+ggsave("./003_motif_probabilities.pdf", probs , width = 16, height = 7, device = "pdf", units = "cm")
+```
+
+# Cebpe and Cebpd motifs 
+
+In addition, we derive motifs for Cebpd and Cebpe from the CIS-BP database for comparison and plot them. 
+
+```{r, eval = TRUE}
+
+m <- read_cisbp("../../data/motifs_cebps_cisbp.txt") 
+
+# Plot a few motif logos
+view_motifs(m[1:12])
+
+# show available names
+# your motifs are in `m` a universalmotif list)
+sel <- m[c(1, 3)]
+
+#these are the selected ones: Cebpe: T060492_3.00, T056962_3.00 Cebpd
+view_motifs(sel)
+            
+```
+
+Save the plots. 
+
+```{r, eval = FALSE}
+
+pdf("./cisbp_motifs_cebpe_and_cebpe.pdf", width = 8, height = 4)
+view_motifs(sel)   # plots them in one figure (multiple panels)
+dev.off()
+
+```
+
+

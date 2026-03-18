@@ -11,6 +11,13 @@ Lentiviral single-cell MPRA of synthetic enhancers reveals motif affinity-based 
 ├── scMPRA_data_processing/
 │   ├── 001_CRS_barcode_association/      # scripts to process barcode association library
 │   └── 002_screen_data_preprocessing/    # scripts to process GFP, guide & GEX libraries
+├── results/
+│   ├── data/                             # lists of cofactors, motifs, etc. used for the analysis
+│   ├── figures/                          # scripts to reproduce main figure panels 
+│   │    ├── figure1/
+│   │    ├── figure2/
+│   │    ├── figure3/
+│   │    ├── figure4/
 └── README.md
 ```
 

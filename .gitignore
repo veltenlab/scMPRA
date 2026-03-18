@@ -1,0 +1,5 @@
+
+results/supplement
+
+#ignore all html files everywhere 
+*.html 

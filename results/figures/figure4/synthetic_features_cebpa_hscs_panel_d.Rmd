@@ -1,0 +1,138 @@
+---
+title: "Cebp synthetic features"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure4")
+
+library(patchwork)
+library(Seurat)
+library(tidyverse)
+
+```
+
+In this .Rmd, we reproduce panel d from figure 4, in which we look at the relationship between the number of motif instances and enhancer activity. 
+First, we read in the data. 
+
+```{r read in data , include=TRUE}
+
+#read in enhancer count data from Lib Beta screen 
+guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libBeta_matched_gfp_guide_enhancer_counts.rds")
+
+#reading in the integrated expression data 
+integrated <- readRDS(file = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/integrated_seurat.rds")
+
+```
+
+First, we have to join the seurat meta data, with the enhancer data. 
+
+```{r}
+#join guide enhancer table with cell type annotation from the integrated seurat object 
+guides <- guides |>  
+  filter(TF == "Cebpa") |> 
+  mutate(cell = paste0("Cebpa.", cell),
+         affinitynum = ifelse(affinitynum == 0.89375, 1, affinitynum)) #because they are the same motif i summarise them here 
+
+#join guide with meta data 
+integrated_meta <- tibble(integrated@meta.data, cell = rownames(integrated@meta.data))
+guides <- left_join(guides, integrated_meta)
+```
+
+# Summarize enhancer activity 
+
+To summarize enhancer activity across cell states, we first aggregated the guide-level data at the level of cell type × sequence. For each enhancer sequence within each annotated cell type, we calculated the mean GFP count and the number of observations contributing to that estimate. This produces a compact summary table that can be used to compare how enhancer activity changes across motif designs and developmental cell states.
+
+```{r}
+#summarize enhancer activity per cell type and sequence design
+cre_celltype_summary <- guides |> 
+  dplyr::group_by(final_annotation, Seqname, CRS, Library, SubLibrary, Seq, TF, nrepeats, affinitynum, orientation, spacer, task, nGATA) |> 
+  dplyr::summarise(mean_gfp = mean(gfp_count),
+                   nobs = n())
+
+```
+
+# HSC populations
+
+We next focused on the Wilkinson cell populations to visualize how enhancer activity varies as a function of motif repeat number across HSC populations. For each sequence class, mean GFP activity was plotted against the number of motif repeats, with separate panels for affinity classes. Point size reflects the number of observations per estimate, providing a visual indication of how strongly each summary is supported by the underlying data.
+
+
+```{r}
+
+#subset to HSC populations 
+hsc_subset <- cre_celltype_summary |> 
+  filter(final_annotation %in% c("EMPP", "LMPP","HSC/MPP cycling", "HSC/MPP")) 
+        
+#define colors 
+another_pal<- c("Eo/Baso/Mast" = "#C43E2F", "Early Eo/Baso/Mast" =  "#F26B55" , "CD55+ immature" = "#E78C64", "Meg/Ery" = "#EDB93E", 
+                "Monocytes late" = "#6C9F8C","Monocytes cycling" = "#217F5C",
+                "Monocytes early" = "#33C38E",
+                "Neutrophils" = "#25625E", "Early Myelocytes" = "#A0F2E8", "Monocyte precursor" = "#54BFB7", "Unclear/Excluded" = "grey", "Neutrophil precursor" = "#9ab1a9", "CD55- immature" = "#d2f9f4", 
+                "EMPP" = "#ff4dff","LMPP" = "#9999ff","HSC/MPP cycling" = "#7a0099", "HSC/MPP" = "#9900cc"  )
+
+
+example1 <- ggplot(hsc_subset, aes(x = nrepeats, y = log(mean_gfp), color = final_annotation, size = nobs)) + 
+  geom_point(alpha = 0.3) + 
+  geom_smooth(se = FALSE, span = 1) + 
+  scale_color_manual(values = another_pal) + 
+  theme_minimal() + 
+  theme(text=element_text(family="ArialMT"),  
+        axis.ticks = element_blank(),
+        panel.grid.major.y = element_blank(),
+        legend.position = "bottom") + 
+  facet_grid(~affinitynum)
+  
+example1
+
+```
+
+Save plot.
+
+```{r, eval = FALSE}
+ggsave("./004_trajectory_example_HSC.pdf", example1, width = 20, height = 10, device = "pdf", units = "cm")
+```
+
+We can also plot all of the other cellular populations. 
+
+```{r}
+
+#subset to HSC populations 
+others_subset <- cre_celltype_summary |> 
+  filter(!(final_annotation %in% c("EMPP", "LMPP","HSC/MPP cycling", "HSC/MPP", "Unclear/Excluded")))
+        
+
+all_celltypes_by_affinity <- ggplot(others_subset, aes(x = nrepeats, y = log(mean_gfp), color = final_annotation, size = nobs)) + 
+  geom_point(alpha = 0.1) + 
+  geom_smooth(se = FALSE, span = 1) + 
+  scale_color_manual(values = another_pal) + 
+  theme_minimal() + 
+  theme(text=element_text(family="ArialMT"),  
+        axis.ticks = element_blank(),
+        panel.grid.major.y = element_blank(),
+        legend.position = "bottom") + 
+  facet_grid(~affinitynum)
+
+all_celltypes_by_affinity
+  
+```
+
+Save plot. 
+
+```{r, eval = FALSE}
+ggsave("./004_trajectory_all_celltypes.pdf", example1, width = 20, height = 10, device = "pdf", units = "cm")
+```
+

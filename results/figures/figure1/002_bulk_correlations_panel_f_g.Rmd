@@ -1,0 +1,329 @@
+---
+title: "Bulk correlations"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figure1")
+
+library(tidyverse)
+library(ggpubr)
+library(patchwork)
+library(scam)
+
+```
+
+In this .Rmd, we reproduce panel f and g from figure 1. 
+For this we used data from two screens:
+1.    PoC screen in K562s 
+2.    LibAlpha screen in Hematopoietic Stem & Progenitor Cells (HSPCs)
+
+For both screens, I'm comparing presence barcode-based preprocessing with GFP-based preprocessing. 
+
+*Presence barcode-based preprocessing involves 2 steps:* 
+1.    Call enhancer+ cells: For K562 cells guide UMI > 2, for HSPCs guide UMI > 1
+2.    Enhancer activity quantification: take corresponding GFP count for enhancer quantification. The corresponding GFP barcode results from the barcode association libraries.
+
+*GFP-based preprocessing involves 1 step:*
+1.    assumes every cell with > 0 GFP UMIs contains the enhancer and uses the UMI as enhancer activity measure. 
+
+# K562 correlations
+First, we read in the K562 data for the differently preprocessed enhancer counts. 
+
+```{r read in data , include=TRUE}
+
+#this is the file for presence-barcode based preprocessing
+enhancer_counts_scMPRA6_guide <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_k562_gfp_guide_enhancer_counts.rds")
+
+#this is the file for GFP-based preprocessing
+enhancer_counts_scMPRA6_GFP <- readRDS("~/cluster/project/SCG4SYN/Experiments/230717_scMPRA_LibAlpha_K562/screen_K562/analysis/001_create_seurat_CRS_level/002_scMPRA6_filtered/002_aggregated_GRE_counts_scMPRA6_filtered_onlyGFPgreater0.rds")
+
+#this is screen K562 data from Frömel et al., 2025 downloaded from figshare
+load("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/all_data_for_manuscript/roberts_figshare/data_updated2.rda")
+
+#Load metadata and Lib A data 
+LibA <- mpra.data$K562.libA.minP.tra$DATA
+
+```
+
+For this analysis, we consider the K562 cells as only one cell type. So to compare single-cell MPRA measurements with bulk MPRA, we pseudo-bulk over all scMPRA measurements per enhancer and compute a mean gfp_count as activity measure for each enhancer. 
+
+
+```{r read in data , include=TRUE}
+
+#mean enhancer acitivtiyfor presence barcode-based preprocessign
+crs.level.summary_guide <- enhancer_counts_scMPRA6_guide %>%
+  dplyr::group_by(CRS, Seqname, TF, nrepeats, affinitynum, orientation, spacer, ControlFor) %>%
+  dplyr::summarise(
+    ncells = n_distinct(cell),
+    nguides = n_distinct(guide_id),
+    mean_gfp = mean(gfp_count),
+    median_gfp = median(gfp_count),
+    sd_gfp = sd(gfp_count),
+    ngfp = n_distinct(gfp_id))
+
+#mean enhancer activity for GFP-based preprocessing
+crs.level.summary_GFP <- enhancer_counts_scMPRA6_GFP %>%
+  dplyr::group_by(CRS, Seqname, TF, nrepeats, affinitynum, orientation, spacer, ControlFor) %>%
+  dplyr::summarise(
+    ncells = n_distinct(cell),
+    mean_gfp = mean(gfp_count),
+    median_gfp = median(gfp_count),
+    sd_gfp = sd(gfp_count),
+    ngfp = n_distinct(gfp_id)
+  )
+
+```
+
+Some data wrangling, to be able to join the pseudobulk activity measurements table with the bulk measurements.
+
+```{r reshaping, include = TRUE}
+
+#map the same sequences with the sequence in Frömel et al., 2025. For this we need to slightly alter the column names and so on. 
+crs.level.summary.GFP <- crs.level.summary_GFP %>% dplyr::rename(CRS_alpha = CRS, CRS = ControlFor)
+crs.level.summary.guide <- crs.level.summary_guide %>% dplyr::rename(CRS_alpha = CRS, CRS = ControlFor)
+
+gfp_corr <- left_join(crs.level.summary.GFP, LibA %>% select(CRS, mean.norm.adj), by = "CRS")
+guide_corr <- left_join(crs.level.summary.guide, LibA %>% select(CRS, mean.norm.adj), by = "CRS")
+
+```
+
+Here im plotting the correlations, and corresponding correlation coefficients (pearson's R). for K562 cells. 
+
+```{r plotting, include = TRUE}
+
+#plot correlation at the sequence level 
+gfp_k562 <- ggplot(gfp_corr, aes(y = mean_gfp, x = mean.norm.adj, size = ncells)) +
+  geom_point(color = "#217379", alpha = 0.5) + 
+  scale_size_area() + 
+  geom_smooth(method = "lm",
+              color = "#D21EFC",
+              linetype = 2) +
+  scale_x_log10() + 
+  scale_y_log10() +
+  stat_cor(method = "pearson") +
+  theme_classic() + 
+  theme(
+    axis.ticks = element_blank(),
+    axis.line = element_line(colour = "grey50"),
+    panel.grid = element_line(color = "#b4aea9"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(linetype = "dashed")
+  ) + 
+  ggtitle("GFP-based Processing")
+
+guide_k562 <- ggplot(guide_corr, aes(y = mean_gfp, x = mean.norm.adj, size = ncells)) +
+  geom_point(color = "#3DC295", alpha = 0.5) + 
+  geom_smooth(method = "lm",
+              color = "#D21EFC",
+              linetype = 2) +
+  scale_size_area() + 
+  scale_x_log10() + 
+  scale_y_log10() +
+  stat_cor(method = "pearson") +
+  theme_classic() + 
+  theme(
+    axis.ticks = element_blank(),
+    axis.line = element_line(colour = "grey50"),
+    panel.grid = element_line(color = "#b4aea9"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(linetype = "dashed")) + 
+  ggtitle("Guide-based Processing")
+
+gfp_k562 + guide_k562
+
+```
+
+# HSPC correlations
+First, we read in the HSPC data for the differently preprocessed enhancer counts. 
+
+```{r data read in HSPC, include = TRUE}
+
+#here im loading scMPRA data of the integrated seurat object of screen LibAlpha and Beta 
+integrated <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/integrated_seurat.rds")
+
+#first um subsetting to only the LibAlpha screen, which we call here "Trp53" experiment 
+integrated <- subset(integrated, experiment == "Trp53")
+
+#now im loading bulk data (two files, cd55+ and cd55- that were processed separately)
+#cd55+ data bulk
+load("~/cluster/project/SCG4SYN/Pipelines/MPRA/3_Report_screen/output_snake/15_HSC_LibraryBeta_minP/filtered/UMI1_DnaIsUmiNon-Binarize_CrsFilter10_MinDnaUmi1_MinRnaUmi0_Reads1_PseudoTrue_PseudoTypeDNA_PseudoValue1/State_5P/CRS_summary_report.rda") #CRS.all 
+
+meta_bulk <- read_csv("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/012_bulk/001_preprocessing/LibBeta_IDs_GREs.csv")
+
+CRS.all.cd55pos <- left_join(CRS.all |> dplyr::rename(LibBeta_ID= CRS), meta_bulk)
+CRS.all.cd55pos <- CRS.all.cd55pos |> 
+  dplyr::rename(Seqname = CRS)
+CRS.all.cd55pos$bulk_population <- "Cd55+" 
+
+#cd55- data bulk load ( lower quality)
+load("~/cluster/project/SCG4SYN/Pipelines/MPRA/3_Report_screen/output_snake/15_HSC_LibraryBeta_minP/filtered/UMI1_DnaIsUmiNon-Binarize_CrsFilter10_MinDnaUmi1_MinRnaUmi0_Reads1_PseudoTrue_PseudoTypeDNA_PseudoValue1/State_5M/CRS_summary_report.rda") #CRS.all 
+CRS.all.cd55neg <- left_join(CRS.all |> dplyr::rename(LibBeta_ID= CRS), meta_bulk)
+CRS.all.cd55neg <- CRS.all.cd55neg |> 
+  dplyr::rename(Seqname = CRS)
+CRS.all.cd55neg$bulk_population <- "Cd55-" 
+
+CRS.all <- rbind(CRS.all.cd55pos, CRS.all.cd55neg)
+
+```
+
+Next, im extracting umap coordinates from the meta data from the integrated seurat object, so that i can divide the single cells into Cd55+ and Cd55- pseudobulks. 
+
+```{r extract umap coordinates, include = TRUE}
+
+meta_seurat <- integrated@meta.data %>% tibble(cell = colnames(integrated))
+
+umap_coordinates <- tibble(cell = colnames(integrated),
+                           x_umap = integrated[["umap"]]@cell.embeddings[,1],
+                           y_umap = integrated[["umap"]]@cell.embeddings[,2], 
+                           final_annotation = integrated$final_annotation)
+
+```
+
+To get an understanding for a good threshold let's visualize the umap: 
+
+```{r extract umap coordinates, include = TRUE}
+
+ggplot(umap_coordinates, aes(x = x_umap, y = y_umap, color = final_annotation)) + 
+  geom_point() + 
+  geom_hline(yintercept = 2.5)
+
+```
+
+Based on the umap and previosuly annotated cell types im defining every cell that has a y-umap coordinate < 2.5 as Cd55- and each cell with y-umap coordinate > 2.5 as Cd55+.  
+
+
+```{r cd55pos and neg definition, include = TRUE}
+
+umap_coordinates <- umap_coordinates |> 
+  dplyr::mutate(bulk_population = ifelse(y_umap > 2.5, "Cd55+", "Cd55-"))
+
+```
+
+
+
+```{r read enhancer data, include = TRUE}
+
+#read in different count matrices and compute correlations 
+enhancer_counts_hspcs_guide <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libAlpha_matched_gfp_guide_enhancer_counts.rds")
+
+enhancer_counts_hspcs_gfp <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/001_integration/002onlyGFP_GRE_counts_scMPRA10_gfpthresh_greater0_filteredCRSLib.rds")
+
+#some meta data adjustment that we can merge later 
+enhancer_counts_hspcs_guide <- enhancer_counts_hspcs_guide %>% 
+  mutate(cell = paste0("Trp53.", cell))
+
+#same for gfp processing
+enhancer_counts_hspcs_gfp <- enhancer_counts_hspcs_gfp %>% 
+  filter(Seqname != "None") |> 
+  mutate(TF_combo = paste0(TF.1, TF.2), 
+         cell = paste0("Trp53.", cell))
+
+```
+
+Now, we are ready to merge the enhancer data with the umap coordinates and Cd55+ & Cd55- annotation. Afterwards we aggregate the enhancer counts per enhancer by averaging all enhancer counts as we did previously for the K562s, this time we have to group between Cd55+ and Cd55-. 
+
+```{r merge and aggregate , include = TRUE}
+
+enhancer_counts_hspcs_guide <- left_join(enhancer_counts_hspcs_guide, umap_coordinates)
+enhancer_counts_hspcs_gfp <- left_join(enhancer_counts_hspcs_gfp, umap_coordinates)
+
+#aggregate the data at crs & FACS celltype level 
+guides_crs.FACScelltype.level.agg <- enhancer_counts_hspcs_guide %>% 
+  group_by(CRS, Seqname, TF.1, TF.2, TF1.affinity, TF2.affinity, nrepeats, spacer, TF_combo, ControlFor, sequence,
+           TF1.orientation, TF2.orientation, design_rep, Library, ctrls, bulk_population) %>%
+  dplyr::summarise(
+    ncells = n_distinct(cell),
+    mean_gfp = mean(gfp_count))
+
+gfps_crs.FACScelltype.level.agg <- enhancer_counts_hspcs_gfp %>% 
+  group_by(CRS, Seqname, TF.1, TF.2, TF1.affinity, TF2.affinity, nrepeats, spacer, TF_combo, ControlFor, sequence,
+           TF1.orientation, TF2.orientation, design_rep, Library, ctrls, bulk_population) %>%
+  dplyr::summarise(
+    ncells = n_distinct(cell),
+    mean_gfp = mean(gfp_count), 
+    median_gfp = median(gfp_count))
+
+```
+
+And now finally we are ready to merge the single-cell pseudobulks with the bulkMPRA data. 
+
+```{r join and plot , include = TRUE}
+
+#lets do the correlation for one cell type first 
+guides_bulk_aggregated <- left_join(guides_crs.FACScelltype.level.agg, CRS.all)
+gfps_bulk_aggregated <- left_join(gfps_crs.FACScelltype.level.agg, CRS.all)
+
+aggregated <- rbind(guides_bulk_aggregated, gfps_bulk_aggregated)
+
+#plot correlation at the sequence level 
+gfp_hsc <- ggplot(aggregated, aes(x = mean.norm, y = mean_gfp, size = ncells)) +
+  geom_point(color = "#217379", alpha = 0.5) + 
+  geom_smooth(method = "lm",
+              color = "#D21EFC",
+              linetype = 2) +
+  scale_size_area() + 
+  #scale_x_log10() + 
+  scale_y_log10() +
+  stat_cor(method = "pearson") +
+  labs(x = "", y = "") + 
+  theme_classic() + 
+  theme(
+    axis.ticks = element_blank(),
+    axis.line = element_line(colour = "grey50"),
+    panel.grid = element_line(color = "#b4aea9"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(linetype = "dashed")
+  ) + 
+  facet_wrap(~bulk_population, scales = "free_y")
+
+gfp_hsc
+
+guide_hsc <- ggplot(aggregated, aes(x = mean.norm, y = mean_gfp, size = ncells)) +
+  geom_point(color = "#3DC295", alpha = 0.5) + 
+  scale_size_area() + 
+  #scale_size_continuous(name = "Number of cells", range = c(1, 8)) + 
+  geom_smooth(method = "lm",            color = "#D21EFC",linetype = 2) +
+  #scale_x_log10() + 
+  scale_y_log10() +
+  stat_cor(method = "pearson") +
+  theme_classic() + 
+  labs(x = "", y = "") + 
+  theme(
+    axis.ticks = element_blank(),
+    axis.line = element_line(colour = "grey50"),
+    panel.grid = element_line(color = "#b4aea9"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(linetype = "dashed")) + 
+  facet_wrap(~bulk_population, scales = "free_y")
+
+
+final_corr_plot <- (gfp_k562 + guide_k562) / 
+  (gfp_hsc + guide_hsc)
+
+#save plot 
+#ggsave("./005_bulk_correlation.pdf", final_corr_plot, width=18, height=10, device = "pdf", units = "cm")  
+
+
+final_corr_plot
+
+```
+

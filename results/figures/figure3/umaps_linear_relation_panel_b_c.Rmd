@@ -1,0 +1,134 @@
+---
+title: "Trp53 Umaps & sequence-activity relationship"
+output: html_document
+date: "2026-03-13"
+---
+
+---
+title: "Cell type-specificity of CREs"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure2")
+
+library(ROCR)
+library(patchwork)
+library(viridis)
+library(tidyverse)
+library(Seurat)
+
+```
+
+In this .Rmd, we reproduce panel b andc from figure 3. Where we show that Trp53 enhancer activity is increases linearily with sequence strengh of the synthetic enhancers, defined as affinity * number of repeats. 
+
+First, we read in data. 
+
+```{r load data}
+
+#reading in the integrated expression data 
+integrated <- readRDS(file = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/integrated_seurat.rds")
+
+#read in enhancer count data from Lib Alpha screen 
+guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libAlpha_matched_gfp_guide_enhancer_counts.rds")
+
+```
+
+# UMAP Trp53 enhancers 
+
+First, we merge the umap coordinates with the enhancer data. 
+
+```{r extract umap, include=TRUE}
+
+#get the umap coord & join it with enhancer count matrix  
+umapCoord <- as.data.frame(Embeddings(object = integrated[["umap"]])) %>% tibble(cell = colnames(integrated))
+
+#fix cell annotations in umapCoord so that i can merge with guides table
+umapCoord <- umapCoord |> 
+  filter(grepl("^Trp53\\.", cell)) |> 
+  mutate(cell = str_remove(cell, "^[^.]*\\."))
+
+guides_umap <- left_join(guides, umapCoord)
+
+```
+
+Then we are subsetting to Trp53 enhancers only, and visualize them. 
+
+```{r viz inert, include=TRUE}
+
+tf_subset <- guides_umap %>% 
+  filter(TF.1 == "Trp53") %>% 
+  arrange(gfp_count)
+
+trp53_single <- ggplot(tf_subset, aes(x = umap_1, y = umap_2)) + 
+  geom_point(data = umapCoord, aes(x= umap_1, y = umap_2), size = 0.01, color = "lightgrey") + 
+  geom_point(aes(x = umap_1, y = umap_2, color = log10(gfp_count+1)), size = 0.5) +
+  theme_classic() + 
+  scale_color_viridis(option = "viridis", trans = "log10") +
+  facet_wrap(nrepeats~TF1.affinity+Seqname) + 
+  theme(legend.position = "bottom") 
+
+trp53_single
+
+```
+
+# Sequence Strength x Activity relationship
+
+Next, we visualize the relationship between the synthetic features of the Trp53 enhancers (affinity and number of motif repeats) and the measured enhancer acitivity. For this, we first mean-aggregate all measurements per sequence. For Trp53 we have 12 different sequences.  
+
+```{r mean aggregate}
+
+crs_level <- tf_subset |> 
+  select(Seqname, TF_combo, TF1.affinity, nrepeats, gfp_count) |> 
+  dplyr::group_by(Seqname, TF_combo, TF1.affinity, nrepeats) |> 
+  dplyr::summarise(mean_gfp = mean(gfp_count)) |> 
+  mutate(seq_strength = TF1.affinity * nrepeats)
+
+```
+
+And now we can plot this sequence strength (affinity * number of repeats) x activity relationship. 
+
+```{r plot aggregated activity}
+
+affinity_colors <- c("#E6D2CF", "#BB9189", "#915C52", "#663329")
+
+simple_tp53 <- ggplot(crs_level, aes(x = seq_strength, y = mean_gfp, color = as.factor(TF1.affinity))) + 
+  geom_point(size = 3) + 
+  labs(x = "Sequence Strength \n (Affinity x nrepeats)", y = "Mean Activity \n Log(GFP count)") + 
+  scale_color_manual(values = affinity_colors) + 
+  theme_minimal() +
+  theme( # Remove y-axis title
+    text=element_text(family="ArialMT", size=10),
+    axis.ticks = element_blank(),
+    panel.grid.major.y = element_blank())
+
+simple_tp53
+
+```
+
+Save the plot. 
+
+```{r save linear, eval = FALSE}
+
+setwd('~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/thesis_figures/')
+ggsave("./014_tp53_activity_design.pdf", simple_tp53, width=11, height=8, device = "pdf", units = "cm")  
+
+```
+
+
+
+

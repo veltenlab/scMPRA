@@ -1,0 +1,374 @@
+---
+title: "Expression - Activity correlations"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    #code_folding: hide
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+    highlight: pygments
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: 72
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure3")
+
+library(patchwork)
+library(Seurat)
+library(viridis)
+library(ggpubr)
+library(tidyverse)
+library(ggseqlogo) #for motif analysis 
+
+```
+
+In this .Rmd, we reproduce panel e and f from Figure 3. 
+1.    Analyse expression - enhancer activity correlations for different motif affinities
+2.    Visualize the different motif instances used in the synthetic enhancers
+3.    Analyse expression - enhancer activity correlations for different motif affinities & number of motif repeats
+
+# Expression-Activity correlations 
+## Stratified by motif affinities 
+
+```{r read in data , include=TRUE}
+
+#reading in the integrated expression data 
+integrated <- readRDS(file = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/integrated_seurat.rds")
+
+#subset to Library Alpha experiment 
+integrated <- subset(integrated, experiment == "Trp53")
+
+#read in enhancer count data from Lib Alpha screen 
+guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libAlpha_matched_gfp_guide_enhancer_counts.rds")
+
+```
+
+We used a whole-transcriptome 5′ CITE-seq dataset from the same ex vivo hematopoietic cultures as a reference and projected these cells onto the Trp53 scMPRA dataset using the `project_anyref()` function from the TAP-seq framework with the following parameters (Schraivogel et al., 2020). This allowed us to assign cluster labels and approximate transcriptome profiles to the scMPRA cells.
+
+
+```{r projection, eval = FALSE}
+
+cite_seq_projected <- project_anyref(seurat_to_project, neighbours = 5, cores = 6, features = list_of_tap_genes,
+                       integrated, ref_reduction = "umap", ref_pseudotime = NULL,
+                       save.maps = NULL, save.final = NULL)
+
+```
+
+Next, I'm loading the `cite_seq_projected` data set and compute a trp53 mean expression value for each cluster of SCT_snn_res.2.  
+
+```{r}
+# --------------------------------------------------
+# 1. Load projected scRNA-seq object
+# --------------------------------------------------
+
+cite_seq_projected <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/cite_seq.rds")
+
+# Mean Trp53 expression per projected cluster
+trp53_expr <- GetAssayData(cite_seq_projected, assay = "RNA", layer = "data")["Trp53", ] |> 
+  as.numeric()
+
+expr_df <- tibble(
+  cell = colnames(cite_seq_projected),
+  mean_expr_cell = trp53_expr,
+  SCT_snn_res.2 = cite_seq_projected$projected.cluster
+) |>
+  dplyr::group_by(SCT_snn_res.2) |>
+  dplyr::summarise(
+    mean_expr = mean(mean_expr_cell, na.rm = TRUE),
+    n_cells = n(),
+    .groups = "drop") |> 
+  filter(n_cells > 20)
+
+```
+
+Next, we subset the Trp53 enhancer activity matrix to observations containing a Trp53-enhancer and compute mean enhancer activity per cluster.  
+
+```{r}
+# --------------------------------------------------
+# 2. Prepare Trp53 scMPRA activity data
+# --------------------------------------------------
+
+guides <- guides |>
+  filter(TF.1 == "Trp53") |> 
+  mutate(cell = paste0("Trp53.", cell)) 
+
+meta_scmpra <- tibble(integrated@meta.data, cell = colnames(integrated))
+guides <- left_join(guides, meta_scmpra, by = "cell")
+
+# Mean Trp53 enhancer activity per cluster, affinity, and repeat number
+activity_df <- guides |>
+  dplyr::group_by(SCT_snn_res.2, TF1.affinity, nrepeats) |>
+  dplyr::summarise(
+    mean_gfp = mean(gfp_count, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+
+Here, we are joining the expression and the enhancer activity matrices for plotting. 
+
+```{r}
+
+# --------------------------------------------------
+# 3. Join expression and activity
+# --------------------------------------------------
+
+plot_df <- left_join(activity_df, expr_df, by = "SCT_snn_res.2") |>
+  mutate(
+    affinity = factor(as.character(TF1.affinity),
+    levels = c("0.25", "0.5", "0.89375", "1")),
+    nrepeats = factor(nrepeats)
+  )
+
+```
+
+Now from this table, we can plot mean Trp53 expression against enhancer activity for the different affinity groups. 
+
+```{r}
+
+#object for majority vote 
+meta_maj_vote <- integrated@meta.data |> 
+  dplyr::filter(experiment == "Trp53") |> 
+  dplyr::group_by(SCT_snn_res.2) |> 
+  dplyr::summarise(maj_vote = names(which.max(table(final_annotation))))
+
+expr_corr_plot <- left_join(plot_df, meta_maj_vote) |> 
+  filter(!is.na(mean_expr)) 
+
+#define colors
+another_pal<- c("Eo/Baso/Mast" = "#C43E2F", "Early Eo/Baso/Mast" =  "#F26B55" , "CD55+ immature" = "#E78C64", "Meg/Ery" = "#EDB93E", 
+                "Monocytes late" = "#6C9F8C","Monocytes cycling" = "#217F5C",
+                "Monocytes early" = "#33C38E",
+                "Neutrophils" = "#25625E", "Early Myelocytes" = "#A0F2E8", "Monocyte precursor" = "#54BFB7", "Unclear/Excluded" = "grey", "Neutrophil precursor" = "#9ab1a9", "CD55- immature" = "#d2f9f4", 
+                "EMPP" = "#ff4dff","LMPP" = "#9999ff","HSC/MPP cycling" = "#7a0099", "HSC/MPP" = "#9900cc"  )
+
+
+expr_corr <- ggplot(expr_corr_plot, aes(x = mean_expr, y = mean_gfp)) +
+  geom_point(aes(color = maj_vote), size = 3) +          # colours per maj_vote
+  geom_smooth(method = "lm", aes(group = 1), se = FALSE, color = "black") +# one line per facet
+  stat_cor(method = "pearson", aes(group = 1)) +           # one r per facet
+  facet_wrap(~ affinity, scales = "free_y") + 
+  scale_color_manual(values = another_pal) + 
+  theme_minimal()
+
+expr_corr 
+
+```
+
+Save plot. 
+
+```{r, eval = FALSE}
+
+ggsave("./003_trp53_expr_correlation_aff_actual_correlations.pdf", expr_corr, width = 18, height = 13, device = "pdf", units = "cm")
+
+```
+ 
+# Expression-Activity correlations 
+## Stratified by motif affinities & number of repeats
+
+We next quantified the relationship between projected Trp53 expression and Trp53 enhancer activity across cell states. For each combination of motif affinity and repeat number, we calculated the correlation between mean GFP activity and mean Trp53 expression across clusters. Resulting p-values were adjusted for multiple testing using the Benjamini–Hochberg method. These correlations were then visualized by affinity, with individual points representing different repeat numbers and point size indicating statistical significance.
+
+```{r}
+# --------------------------------------------------
+# 4. Correlate within each affinity x nrepeats group
+# --------------------------------------------------
+
+plot.1.data <- plot_df |>
+  dplyr::group_by(affinity, nrepeats) |>
+  dplyr::summarise(
+    correlation = unname(cor.test(mean_gfp, mean_expr)$estimate),
+    p_val = cor.test(mean_gfp, mean_expr)$p.value,
+    .groups = "drop"
+  ) |>
+  mutate(
+    p_adj_BH = p.adjust(p_val, method = "BH")
+  )
+
+```
+
+Plot the correlations between enhancer activity and expresion levels for each enhancer sequence(with different features) separataely in a boxplot. 
+
+```{r}
+# --------------------------------------------------
+# 5. Plot
+# --------------------------------------------------
+
+repeat_colors <- c("#1C4753", "#92AAC8", "#B1CEF2")
+
+plot.1 <- ggplot(plot.1.data, aes(x = affinity, y = correlation)) +
+  geom_boxplot(fill = "grey80", alpha = 0.5, outlier.shape = NA) +
+  geom_point(
+    aes(color = nrepeats, size = -log10(p_adj_BH)),
+    position = position_dodge(width = 0.3)
+  ) +
+  labs(
+    x = "Affinity",
+    y = "Correlation\nActivity and Trp53 expression",
+    color = "nrepeats",
+    size = "-log10(FDR)"
+  ) +
+  scale_color_manual(values = repeat_colors) +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "ArialMT"),
+    axis.ticks = element_blank(),
+    panel.grid.major.y = element_blank()
+  )
+
+plot.1
+
+```
+
+Save plot. 
+
+```{r, eval = FALSE}
+
+ggsave("./002_trp53_expr_correlation_aff.pdf", plot.1, width = 14, height = 8, device = "pdf", units = "cm")
+
+```
+
+# Motif analysis 
+
+We next analyzed the motif composition of the Trp53 sequences present in the library. Uppercase motif instances were extracted from each sequence, grouped by affinity class, and decomposed into position-specific nucleotide frequencies. These frequencies were used to generate sequence logos for each affinity class and for the full set of Trp53 motifs, enabling comparison of motif structure across sequence classes. We are using the `ggseqlogo` library for this analysis. 
+
+
+```{r}
+
+# -------------------------------------------------------------------
+# 1. Extract uppercase motif instances from each sequence
+# -------------------------------------------------------------------
+
+motif_table <- guides |>
+  select(sequence, Seqname, TF.1, nrepeats, TF1.affinity) |>
+  filter(TF.1 == "Trp53") |>
+  distinct() |> 
+  select(sequence, TF1.affinity) |>
+  mutate(upper_runs = str_extract_all(sequence, "[A-Z]+")) |>
+  transmute(
+    sequence,
+    TF1.affinity,
+    motif1 = map_chr(upper_runs, ~ purrr::pluck(.x, 1, .default = NA_character_)),
+    motif2 = map_chr(upper_runs, ~ purrr::pluck(.x, 2, .default = NA_character_)),
+    motif3 = map_chr(upper_runs, ~ purrr::pluck(.x, 3, .default = NA_character_)),
+    motif4 = map_chr(upper_runs, ~ purrr::pluck(.x, 4, .default = NA_character_)),
+    motif5 = map_chr(upper_runs, ~ purrr::pluck(.x, 5, .default = NA_character_)),
+    motif6 = map_chr(upper_runs, ~ purrr::pluck(.x, 6, .default = NA_character_))
+  )
+
+motifs_long <- motif_table |>
+  pivot_longer(
+    cols = starts_with("motif"),
+    names_to = "motif_id",
+    values_to = "motif",
+    values_drop_na = TRUE
+  ) |>
+  mutate(motif = toupper(motif)) |>
+  filter(str_detect(motif, "^[ACGT]+$"))
+
+```
+
+The extracted motifs are converted into a long table in which each row corresponds to one motif occurrence.
+
+```{r}
+
+# --------------------------------------------------
+# PWM per affinity class
+# --------------------------------------------------
+
+pfm_aff <- motifs_long %>%
+  mutate(letters = str_split(motif, "")) %>%
+  unnest_longer(letters, values_to = "pos_letters", indices_to = "position") %>%
+  dplyr::count(TF1.affinity, position, pos_letters, name = "count") %>%
+  complete(TF1.affinity, position, pos_letters = c("A", "C", "G", "T"), fill = list(count = 0)) %>%
+  arrange(TF1.affinity, position)
+
+pc <- 0
+
+pwm_tidy_aff <- pfm_aff %>%
+  group_by(TF1.affinity, position) %>%
+  mutate(prob = (count + pc) / sum(count + pc)) %>%
+  ungroup()
+
+pwm_wide_aff <- pwm_tidy_aff %>%
+  select(TF1.affinity, position, base = pos_letters, prob) %>%
+  pivot_wider(names_from = base, values_from = prob) %>%
+  arrange(TF1.affinity, position)
+
+```
+
+## Base frequency plot
+
+To visualize how nucleotide composition varies across motif positions, we computed position-wise base probabilities for the Trp53 motif instances present in the library. The stacked bar plots show the frequency of each nucleotide at every position, stratified by motif affinity class. This representation highlights how the sequence composition differs across designed affinity groups.
+
+
+```{r}
+
+# --------------------------------------------------
+# Plot 1: stacked base frequencies by affinity class
+# --------------------------------------------------
+
+all_affinity_freq <- ggplot(pwm_tidy_aff, aes(x = position, y = prob, fill = pos_letters)) +
+  geom_col(width = 0.9, position = "stack") +
+  facet_wrap(~ TF1.affinity, scales = "free_x") +
+  scale_fill_manual(values = c(A = "forestgreen", C = "blue", G = "orange", T = "red")) +
+  labs(
+    x = "Position",
+    y = "Probability",
+    fill = "Base",
+    title = "PWMs by Affinity Class"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major.x = element_blank(),
+    axis.text.x = element_text(angle = 90, vjust = 0.5)
+  )
+
+all_affinity_freq
+
+```
+
+## Sequence logo plot
+
+We further summarized the motif composition using sequence logos generated from the position-specific base probabilities. Each logo represents the aggregated motif instances for a given affinity class and illustrates the relative contribution of each nucleotide at every motif position. Together, these plots provide an overview of how motif structure varies across affinity classes in the library.
+
+
+```{r}
+# --------------------------------------------------
+# Plot 2: sequence logos by affinity class
+# --------------------------------------------------
+
+plots <- pwm_wide_aff %>%
+  group_split(TF1.affinity) %>%
+  lapply(function(df) {
+    aff <- unique(df$TF1.affinity)
+    mat <- as.matrix(t(df %>% select(A, C, G, T)))
+    colnames(mat) <- df$position
+    
+    ggseqlogo(mat, method = "prob") +
+      ggtitle(paste("Affinity =", aff))
+  })
+
+all_logos <- wrap_plots(plots, ncol = 2)
+all_logos
+
+```
+
+Save plot. 
+
+```{r, eval = FALSE}
+
+ggsave("./006_logos_for_affinities.pdf", all_logos, width = 18, height = 12, device = "pdf", units = "cm")
+
+```
+
+
+
+
