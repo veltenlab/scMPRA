@@ -18,7 +18,7 @@ editor_options:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
-knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figure1")
+knitr::opts_knit$set(root.dir = "/users/lvelten/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figure1")
 
 
 library(tidyverse)
@@ -47,10 +47,10 @@ many cells we detected 0 enhancers, in how many 1, ...
 
 #Read in data 
 #loading seurat object 
-hsc_poc <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_hsc_seurat.rds")
+hsc_poc <- readRDS("/users/lvelten/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_hsc_seurat.rds")
 
 #loading preprocessed matched_gfp_guide_enhancer_counts file
-hsc_poc_guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_hsc_gfp_guide_enhancer_counts.rds")
+hsc_poc_guides <- readRDS("/users/lvelten/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_hsc_gfp_guide_enhancer_counts.rds")
 
 #count the number of cells from seurat object 
 no_cells_hsc_poc <- ncol(hsc_poc)
@@ -179,13 +179,13 @@ hsc_guide_cap
 
 ```{r k562 histo, include=TRUE}
 
-k562_poc <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_k562_seurat.rds")
+k562_poc <- readRDS("/users/lvelten/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_k562_seurat.rds")
 
 cells_to_keep <- WhichCells(k562_poc, expression = nFeature_RNA > 40 & nFeature_RNA < 200) 
 k562_poc <- subset(k562_poc, cells = cells_to_keep)
 
 #loading preprocessed matched_gfp_guide_enhancer_counts file
-k562_poc_guides <- readRDS("~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_k562_gfp_guide_enhancer_counts.rds")
+k562_poc_guides <- readRDS("/users/lvelten/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/screen_HSC/002_analysis/paper_figures/files_figshare/libPoC_k562_gfp_guide_enhancer_counts.rds")
 
 #count the number of cells from seurat object 
 no_cells_k562_poc <- ncol(k562_poc)
@@ -241,9 +241,9 @@ k562_guide_cap
 
 ```
 
--   Estimated capture rate for HSPCs was: `r k562_det_rate_enhancer`.
+-   Estimated capture rate for K562s was: `r k562_det_rate_enhancer`.
   
--   Estimated MoI for HSPCs was: `r k562_MOI_enhancer`.
+-   Estimated MoI for K56s was: `r k562_MOI_enhancer`.
 
 # Histograms of absolute enhancer detections per Cell
 
@@ -290,9 +290,9 @@ hist <- ggplot(df, aes(x = bin, y = count)) +
 hist
 
 #for saving:
-#pdf("./004_presense_barcode_histograms.pdf", width = 7 / 2.54, height = 9 / 2.54)
-#hist
-#dev.off()
+pdf("./004_presense_barcode_histograms.pdf", width = 7 / 2.54, height = 9 / 2.54)
+hist
+dev.off()
 
 ```
 

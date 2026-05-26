@@ -26,7 +26,6 @@ knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
 knitr::opts_knit$set(root.dir = "~/cluster/project/SCG4SYN/Experiments/240524_scMPRA_LibBeta_HSC_iseq/scMPRA/results/figures/figure2")
 
-library(ROCR)
 library(patchwork)
 library(viridis)
 library(tidyverse)
